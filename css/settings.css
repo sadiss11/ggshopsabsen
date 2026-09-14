@@ -1,0 +1,274 @@
+/* ============================================
+   PORTAL KARYAWAN - SETTINGS STYLES
+   ============================================ */
+
+.settings-container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* Header */
+.settings-header {
+    margin-bottom: var(--spacing-lg);
+}
+
+.settings-header h2 {
+    font-size: var(--font-size-xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.settings-header p {
+    color: var(--text-secondary);
+}
+
+/* Grid Layout */
+.settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing-md);
+}
+
+/* Settings Card */
+.settings-card {
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow);
+}
+
+.settings-card.shift-settings {
+    grid-column: span 2;
+}
+
+.settings-form {
+    padding: var(--spacing-md);
+}
+
+/* Shifts List */
+.shifts-list {
+    padding: var(--spacing-md);
+}
+
+.shift-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing);
+    padding: var(--spacing);
+    background: var(--color-gray-50);
+    border-radius: var(--border-radius);
+    margin-bottom: var(--spacing);
+}
+
+.shift-item:last-child {
+    margin-bottom: 0;
+}
+
+.shift-input-group {
+    flex: 1;
+}
+
+.shift-input-group label {
+    display: block;
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    margin-bottom: 2px;
+}
+
+.shift-input-group input {
+    width: 100%;
+    padding: var(--spacing-xs) var(--spacing);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    font-size: var(--font-size-sm);
+}
+
+.shift-input-group input:focus {
+    outline: none;
+    border-color: var(--color-primary);
+}
+
+.btn-delete-shift {
+    width: 36px;
+    height: 36px;
+    border-radius: var(--border-radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--color-danger);
+    background: rgba(239, 68, 68, 0.1);
+    transition: all var(--transition-fast);
+}
+
+.btn-delete-shift:hover {
+    background: var(--color-danger);
+    color: var(--color-white);
+}
+
+/* Working Days */
+.working-days {
+    padding: var(--spacing-md);
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: var(--spacing);
+}
+
+.day-checkbox {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    cursor: pointer;
+    padding: var(--spacing);
+    border-radius: var(--border-radius);
+    background: var(--color-gray-50);
+    transition: all var(--transition-fast);
+}
+
+.day-checkbox:hover {
+    background: var(--color-gray-100);
+}
+
+.day-checkbox input {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--color-primary);
+    cursor: pointer;
+}
+
+.day-label {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.day-checkbox input:checked + .day-label {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+/* System Settings */
+.system-settings {
+    padding: var(--spacing-md);
+}
+
+.setting-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing) 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.setting-item:last-child {
+    border-bottom: none;
+}
+
+.setting-info {
+    flex: 1;
+}
+
+.setting-name {
+    display: block;
+    font-weight: 500;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+}
+
+.setting-desc {
+    display: block;
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+}
+
+.setting-control input[type="number"] {
+    width: 80px;
+    padding: var(--spacing-xs) var(--spacing);
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-sm);
+    text-align: center;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 26px;
+}
+
+.toggle-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: var(--color-gray-300);
+    transition: var(--transition-fast);
+    border-radius: 26px;
+}
+
+.toggle-slider::before {
+    position: absolute;
+    content: "";
+    height: 20px;
+    width: 20px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: var(--transition-fast);
+    border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+    background-color: var(--color-primary);
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+    transform: translateX(24px);
+}
+
+/* Admin Only Indicator */
+.admin-only.visible {
+    display: block;
+}
+
+/* Responsive */
+@media (max-width: 992px) {
+    .settings-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .settings-card.shift-settings {
+        grid-column: span 1;
+    }
+    
+    .shift-item {
+        flex-wrap: wrap;
+    }
+    
+    .shift-input-group {
+        min-width: calc(50% - var(--spacing));
+    }
+}
+
+@media (max-width: 576px) {
+    .working-days {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .setting-item {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--spacing);
+    }
+    
+    .shift-input-group {
+        min-width: 100%;
+    }
+}

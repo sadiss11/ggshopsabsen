@@ -1,0 +1,395 @@
+/* ============================================
+   PORTAL KARYAWAN - ABSENSI STYLES
+   ============================================ */
+
+.absensi-container {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* Header */
+.absensi-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--spacing-lg);
+    padding: var(--spacing-lg);
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow);
+}
+
+.shift-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.shift-label {
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+}
+
+.shift-name {
+    font-size: var(--font-size-xl);
+    font-weight: 700;
+    color: var(--color-primary);
+}
+
+.shift-time {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+.current-datetime {
+    text-align: right;
+}
+
+.live-clock {
+    font-size: var(--font-size-2xl);
+    font-weight: 700;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.live-date {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+/* Grid Layout */
+.absensi-grid {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+}
+
+/* Main Attendance Card */
+.attendance-main-card {
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow);
+    padding: var(--spacing-xl);
+}
+
+.attendance-status {
+    text-align: center;
+    margin-bottom: var(--spacing-xl);
+}
+
+.status-ring {
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    margin: 0 auto var(--spacing-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.status-ring.waiting {
+    background: linear-gradient(135deg, rgba(245, 158, 11, 0.1) 0%, rgba(251, 191, 36, 0.1) 100%);
+    border: 3px solid var(--color-primary);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.status-ring.active {
+    background: linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(52, 211, 153, 0.1) 100%);
+    border: 3px solid var(--color-success);
+}
+
+.status-ring.on-break {
+    background: linear-gradient(135deg, rgba(59, 130, 246, 0.1) 0%, rgba(96, 165, 250, 0.1) 100%);
+    border: 3px solid var(--color-info);
+}
+
+.status-ring.completed {
+    background: linear-gradient(135deg, rgba(100, 116, 139, 0.1) 0%, rgba(148, 163, 184, 0.1) 100%);
+    border: 3px solid var(--text-muted);
+}
+
+.status-icon {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2rem;
+}
+
+.status-ring.waiting .status-icon {
+    background: var(--color-primary-gradient);
+    color: var(--color-white);
+}
+
+.status-ring.active .status-icon {
+    background: linear-gradient(135deg, #10B981 0%, #34D399 100%);
+    color: var(--color-white);
+}
+
+.status-ring.on-break .status-icon {
+    background: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%);
+    color: var(--color-white);
+}
+
+.status-ring.completed .status-icon {
+    background: linear-gradient(135deg, #64748B 0%, #94A3B8 100%);
+    color: var(--color-white);
+}
+
+.status-text {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: var(--spacing-xs);
+}
+
+.status-subtext {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+/* Attendance Buttons */
+.attendance-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--spacing);
+}
+
+.attendance-btn {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing);
+    padding: var(--spacing-md);
+    background: var(--color-gray-50);
+    border: 2px solid transparent;
+    border-radius: var(--border-radius);
+    transition: all var(--transition-fast);
+    text-align: left;
+}
+
+.attendance-btn:hover:not(:disabled) {
+    background: var(--color-white);
+    border-color: var(--color-primary);
+    box-shadow: var(--shadow);
+    transform: translateY(-2px);
+}
+
+.attendance-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.attendance-btn.active {
+    background: rgba(245, 158, 11, 0.1);
+    border-color: var(--color-primary);
+}
+
+.attendance-btn.completed {
+    background: rgba(16, 185, 129, 0.1);
+    border-color: var(--color-success);
+}
+
+.attendance-btn .btn-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: var(--border-radius);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: var(--font-size-lg);
+    color: var(--color-white);
+    flex-shrink: 0;
+}
+
+.clock-in-btn .btn-icon { background: var(--color-success); }
+.clock-out-btn .btn-icon { background: var(--color-danger); }
+.break-btn .btn-icon { background: var(--color-info); }
+.after-break-btn .btn-icon { background: var(--color-warning); }
+.overtime-btn .btn-icon { background: var(--color-secondary); }
+
+.btn-text {
+    display: flex;
+    flex-direction: column;
+}
+
+.btn-label {
+    font-weight: 600;
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+}
+
+.btn-time {
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+}
+
+/* Timeline Card */
+.timeline-card {
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow);
+}
+
+.timeline {
+    padding: var(--spacing-md);
+}
+
+.timeline-item {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--spacing);
+    padding-bottom: var(--spacing-lg);
+    position: relative;
+}
+
+.timeline-item::before {
+    content: '';
+    position: absolute;
+    left: 11px;
+    top: 24px;
+    bottom: 0;
+    width: 2px;
+    background: var(--border-color);
+}
+
+.timeline-item:last-child {
+    padding-bottom: 0;
+}
+
+.timeline-item:last-child::before {
+    display: none;
+}
+
+.timeline-dot {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid var(--border-color);
+    background: var(--color-white);
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+}
+
+.timeline-item.completed .timeline-dot {
+    background: var(--color-success);
+    border-color: var(--color-success);
+}
+
+.timeline-item.active .timeline-dot {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.timeline-item.pending .timeline-dot {
+    background: var(--color-white);
+    border-color: var(--border-color);
+}
+
+.timeline-content {
+    flex: 1;
+    padding-top: 2px;
+}
+
+.timeline-title {
+    display: block;
+    font-weight: 500;
+    font-size: var(--font-size-sm);
+    color: var(--text-primary);
+}
+
+.timeline-time {
+    display: block;
+    font-size: var(--font-size-xs);
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* History Card */
+.history-card {
+    background: var(--bg-secondary);
+    border-radius: var(--border-radius-lg);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.history-table-wrapper {
+    overflow-x: auto;
+}
+
+.history-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.history-table th,
+.history-table td {
+    padding: var(--spacing) var(--spacing-md);
+    text-align: left;
+    font-size: var(--font-size-sm);
+}
+
+.history-table th {
+    background: var(--color-gray-50);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: var(--font-size-xs);
+    letter-spacing: 0.5px;
+}
+
+.history-table tbody tr {
+    border-bottom: 1px solid var(--border-color);
+    transition: background-color var(--transition-fast);
+}
+
+.history-table tbody tr:hover {
+    background: var(--color-gray-50);
+}
+
+.history-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.history-table td {
+    color: var(--text-primary);
+}
+
+/* Mobile Responsive - Let mobile.css handle most styles */
+@media (max-width: 768px) {
+    .absensi-container {
+        padding: 0 12px;
+    }
+    
+    .history-table-wrapper {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    
+    .history-table {
+        font-size: 12px;
+        min-width: 500px;
+    }
+    
+    .history-table th,
+    .history-table td {
+        padding: 10px 12px;
+        white-space: nowrap;
+    }
+}
+
+@media (max-width: 576px) {
+    .history-table {
+        font-size: 11px;
+    }
+    
+    .history-table th,
+    .history-table td {
+        padding: 8px 10px;
+    }
+}

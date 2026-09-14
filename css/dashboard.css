@@ -1,0 +1,176 @@
+/* ============================================
+   PORTAL KARYAWAN - DASHBOARD STYLES
+   ============================================ */
+
+/* Dashboard specific styles that extend main.css */
+
+/* Welcome Card Time-based Colors */
+.welcome-card.morning {
+    background: linear-gradient(135deg, #F59E0B 0%, #FBBF24 100%);
+}
+
+.welcome-card.afternoon {
+    background: linear-gradient(135deg, #3B82F6 0%, #60A5FA 100%);
+}
+
+.welcome-card.evening {
+    background: linear-gradient(135deg, #8B5CF6 0%, #A78BFA 100%);
+}
+
+/* Stats Card Enhancements */
+.stats-chart {
+    position: relative;
+}
+
+/* Session Card Enhancements */
+.session-card .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.status-badge {
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: var(--font-size-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+}
+
+.status-badge.active {
+    background: rgba(16, 185, 129, 0.1);
+    color: var(--color-success);
+}
+
+.status-badge.inactive {
+    background: rgba(148, 163, 184, 0.1);
+    color: var(--text-muted);
+}
+
+/* Quick Actions Hover Effects */
+.quick-btn {
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.quick-btn:hover {
+    transform: translateY(-4px);
+    box-shadow: var(--shadow-lg);
+}
+
+.quick-btn:hover .quick-icon {
+    transform: scale(1.1);
+}
+
+.quick-icon {
+    transition: transform 0.3s ease;
+}
+
+/* Bar Chart Animations */
+.bar-fill {
+    animation: barGrow 1s ease-out forwards;
+    transform-origin: bottom;
+}
+
+@keyframes barGrow {
+    from {
+        transform: scaleY(0);
+    }
+    to {
+        transform: scaleY(1);
+    }
+}
+
+/* Activity Item Hover */
+.activity-item {
+    transition: background-color var(--transition-fast);
+    border-radius: var(--border-radius-sm);
+    margin: 0 -var(--spacing);
+    padding-left: var(--spacing);
+    padding-right: var(--spacing);
+}
+
+.activity-item:hover {
+    background: var(--color-gray-50);
+}
+
+/* Team Avatars Animation */
+.avatar-stack img {
+    transition: all var(--transition-fast);
+}
+
+.avatar-stack img:hover {
+    transform: translateY(-4px) scale(1.1);
+    z-index: 10;
+    box-shadow: var(--shadow);
+}
+
+/* Dashboard Card Hover */
+.dashboard-card {
+    transition: transform var(--transition), box-shadow var(--transition);
+}
+
+.dashboard-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-lg);
+}
+
+/* Responsive Adjustments */
+@media (max-width: 1200px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(6, 1fr);
+    }
+    
+    .stats-card {
+        grid-column: span 6;
+    }
+    
+    .session-card {
+        grid-column: span 3;
+    }
+    
+    .quick-actions {
+        grid-column: span 3;
+    }
+    
+    .chart-card {
+        grid-column: span 3;
+    }
+    
+    .activity-card {
+        grid-column: span 3;
+    }
+    
+    .team-card {
+        grid-column: span 6;
+    }
+}
+
+@media (max-width: 768px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .stats-card,
+    .session-card,
+    .quick-actions,
+    .chart-card,
+    .activity-card,
+    .team-card {
+        grid-column: span 1;
+    }
+    
+    .stats-chart {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .quick-buttons {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .bar-chart {
+        height: 150px;
+    }
+}
+
+
