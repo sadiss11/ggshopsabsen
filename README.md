@@ -69,8 +69,8 @@ npm run dev          # buka http://localhost:5173, akun demo tercetak di termina
 ## Pengujian
 
 ```bash
-npm test           # 89 uji backend pada mock Apps Script (termasuk gaji, bonus, privasi, cache)
-npm run test:e2e   # 17 uji E2E di Google Chrome (kamera palsu & emulasi GPS)
+npm test           # 90 uji backend pada mock Apps Script (termasuk gaji, bonus, privasi, cache)
+npm run test:e2e   # 19 uji E2E di Google Chrome (kamera palsu & emulasi GPS)
 npm run test:build # uji E2E & klik terhadap hasil build (kode yang di-push)
 npm run test:klik  # klik satu per satu setiap elemen (antislop R-35)
 npm run assets     # sematkan ulang gambar dari assets/ (latar & logo)
@@ -85,3 +85,5 @@ Aplikasi yang sama juga dapat dibuka dari Vercel (mis. `https://ggshopsabsen.ver
 - `vercel.json` menyajikan folder `public/` apa adanya (tanpa instalasi & build di Vercel) dan menambahkan header keamanan (`X-Frame-Options: DENY`, `Permissions-Policy` kamera & lokasi hanya untuk situs ini).
 - Setiap kali kode berubah: `npm run push` (Apps Script) → deploy versi baru → `npm run vercel` → commit & push ke GitHub; Vercel memperbarui otomatis dari GitHub.
 - URL server diambil dari `GAS_EXEC_URL` atau konstanta di `dev/build-vercel.js`.
+- **Service worker** (`public/sw.js`) menyimpan halaman aplikasi di HP: situs terbuka seketika, juga saat sinyal lemah (uji E19: 59 ms tanpa jaringan). Versi terbaru diunduh di belakang; bila berbeda, muncul tombol "Versi baru · muat ulang". Hanya halaman aplikasi yang disimpan; data dan panggilan ke server Google tidak disentuh.
+- Halaman menyiapkan koneksi ke `script.google.com` & `script.googleusercontent.com` sejak dibuka (`preconnect`). Satu panggilan ke server tetap sekitar 1 detik karena waktu eksekusi Apps Script; karena itu data halaman ditampilkan dari cache dan diperbarui di belakang.

@@ -79,9 +79,14 @@ function startServer(opts = {}) {
     if (req.method === 'GET' && req.url === '/__vercel') {
       env.setNow(now());
       let html;
-      try { html = require('./build-vercel').vercelHtml(env, '/__exec'); } catch (e) { res.writeHead(500); res.end(String(e.stack || e)); return; }
+      try { html = require('./build-vercel').vercelHtml(env, '/__exec', '/__sw.js'); } catch (e) { res.writeHead(500); res.end(String(e.stack || e)); return; }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
       res.end(html);
+      return;
+    }
+    if (req.method === 'GET' && req.url === '/__sw.js') {
+      res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-cache' });
+      res.end(require('./build-vercel').SW_JS);
       return;
     }
     if (req.url === '/favicon.ico') { res.writeHead(204); res.end(); return; }

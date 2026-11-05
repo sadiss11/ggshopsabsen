@@ -617,6 +617,8 @@ const App = {
 
   async start() {
     this.token = Store.get('sdm_token');
+    // Versi Vercel: service worker memberi tahu bila ada versi aplikasi yang lebih baru.
+    document.addEventListener('app:update', () => { if (!this.user) location.reload(); else this.showSync('update'); });
     Clock.start();
     window.addEventListener('hashchange', () => { if (this.user && !this.user.mustChangePassword) this.route(); });
     // Web app Apps Script berjalan di dalam iframe: tautan menu ditangani di sini agar
@@ -646,7 +648,7 @@ const App = {
       const boot = await api('app.boot', { page: this.parseHash().id });
       this.applyBoot(boot, t0, performance.now());
       this.afterLogin(true);
-      this.schedulePrefetch();
+      this.schedulePrefetch(300);
     } catch (e) {
       if (e.code === 'AUTH_REQUIRED') return;
       if (e.code === 'PASSWORD_CHANGE_REQUIRED') return;
@@ -746,14 +748,15 @@ const App = {
   syncing(d) {
     this.syncCount = Math.max(0, this.syncCount + d);
     const el = $('#sync-ind');
-    if (el && el.dataset.state !== 'stale') this.showSync(this.syncCount ? 'busy' : '');
+    if (el && el.dataset.state !== 'stale' && el.dataset.state !== 'update') this.showSync(this.syncCount ? 'busy' : '');
   },
   showSync(state) {
     const el = $('#sync-ind');
     if (!el) return;
     el.dataset.state = state || '';
     el.classList.toggle('hidden', !state);
-    el.innerHTML = state === 'stale' ? '<button type="button" class="sync-btn" data-action="reload-view">' + icon('refresh', 'ic-sm') + '<span>Data baru · muat ulang</span></button>'
+    el.innerHTML = state === 'update' ? '<button type="button" class="sync-btn" data-action="reload-app">' + icon('refresh', 'ic-sm') + '<span>Versi baru · muat ulang</span></button>'
+      : state === 'stale' ? '<button type="button" class="sync-btn" data-action="reload-view">' + icon('refresh', 'ic-sm') + '<span>Data baru · muat ulang</span></button>'
       : state === 'busy' ? '<span class="spinner" aria-hidden="true"></span><span class="sync-text">Memperbarui</span>' : '';
   },
 
@@ -880,6 +883,7 @@ const App = {
     const app = $('#app');
     on(app, 'click', '[data-action="menu"]', () => this.openSidebar());
     on(app, 'click', '[data-action="reload-view"]', () => { this.showSync(''); this.route(); });
+    on(app, 'click', '[data-action="reload-app"]', () => location.reload());
     on(app, 'click', '#sidebar-backdrop', () => this.closeSidebar());
     on(app, 'click', '[data-action="logout"]', async () => {
       if (await UI.confirm({ title: 'Keluar', message: 'Keluar dari aplikasi di perangkat ini?', confirmText: 'Keluar' })) this.logout();
@@ -1000,7 +1004,7 @@ const App = {
         Store.set('sdm_token', r.token, v.remember);
         this.applyBoot(r, t0, performance.now());
         this.afterLogin(!!r.notif);
-        if (!r.user.mustChangePassword) this.schedulePrefetch();
+        if (!r.user.mustChangePassword) this.schedulePrefetch(300);
       } catch (err) {
         UI.busy(btn, false);
         errBox.innerHTML = UI.callout('danger', esc(err.message));

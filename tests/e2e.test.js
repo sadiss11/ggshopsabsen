@@ -715,3 +715,25 @@ test('E18 versi Vercel: halaman statis memanggil server lewat doPost, kamera lan
     assert.deepEqual(t.errors, []);
   } finally { await t.close(); }
 });
+
+test('E19 versi Vercel: halaman aplikasi tersimpan di HP (service worker), terbuka seketika walau tanpa jaringan', { skip: SKIP }, async () => {
+  const t = await setup({ latencyMs: 1200 });
+  try {
+    await t.page.goto(t.url + '__vercel', { waitUntil: 'domcontentloaded' });
+    await t.page.waitForSelector('#login-form');
+    await t.page.waitForFunction(() => navigator.serviceWorker && navigator.serviceWorker.controller === null ? navigator.serviceWorker.ready.then(() => true) : true, { timeout: 15000 });
+    // Muat ulang sekali agar halaman dikendalikan service worker.
+    await t.page.reload({ waitUntil: 'domcontentloaded' });
+    await t.page.waitForFunction(() => !!navigator.serviceWorker.controller, { timeout: 15000 });
+    await t.page.waitForFunction(() => caches.open('ggshops-shell-v1').then(c => c.keys()).then(k => k.length > 0), { timeout: 15000 });
+    await t.page.setOfflineMode(true);
+    const t0 = Date.now();
+    await t.page.reload({ waitUntil: 'domcontentloaded' });
+    await t.page.waitForSelector('#login-form', { timeout: 10000 });
+    const ms = Date.now() - t0;
+    console.log('E19 waktu buka halaman tanpa jaringan: ' + ms + ' ms');
+    assert.ok(ms < 1500, 'terbuka dari simpanan HP dalam ' + ms + ' ms');
+    await t.page.setOfflineMode(false);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
+});
