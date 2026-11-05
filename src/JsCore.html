@@ -1,0 +1,1075 @@
+<script>
+'use strict';
+/* =========================================================================
+ * Inti aplikasi: ikon, utilitas, API (google.script.run), jam server,
+ * komponen UI, tabel data, router, kerangka halaman, login.
+ * Waktu resmi selalu dari server: jam di layar = waktu server + selisih
+ * performance.now() sejak sinkronisasi (tidak terpengaruh jam perangkat).
+ * ========================================================================= */
+const BOOT = window.BOOT || { companyName: 'Perusahaan', appName: 'SDM & Absensi' };
+
+const ICONS = {
+  dashboard: '<rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  scan: '<path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><path d="M9 9h.01"/><path d="M15 9h.01"/>',
+  clipboard: '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/>',
+  calendarCheck: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/><path d="m9 16 2 2 4-4"/>',
+  calendarClock: '<path d="M21 7.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h3.5"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h5"/><path d="M17.5 17.5 16 16.3V14"/><circle cx="16" cy="16" r="6"/>',
+  report: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 18v-2"/><path d="M12 18v-6"/><path d="M16 18v-4"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  userCheck: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><polyline points="16 11 18 13 22 9"/>',
+  userX: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m17 8 5 5"/><path d="m22 8-5 5"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" x2="3" y1="12" y2="12"/>',
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
+  menu: '<line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/>',
+  more: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  edit: '<path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+  search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  checkCircle: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+  xCircle: '<circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/>',
+  alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  pin: '<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/>',
+  camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/>',
+  cameraOff: '<line x1="2" x2="22" y1="2" y2="22"/><path d="M7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16"/><path d="M9.5 4h5L17 7h3a2 2 0 0 1 2 2v7.5"/><path d="M14.121 15.121A3 3 0 1 1 9.88 10.88"/>',
+  switchCam: '<path d="M11 19H4a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/><path d="M13 5h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-5"/><circle cx="12" cy="12" r="3"/><path d="m18 22-3-3 3-3"/><path d="m6 2 3 3-3 3"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  chevronLeft: '<path d="m15 18-6-6 6-6"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
+  key: '<path d="M2 18v3c0 .6.4 1 1 1h4v-3h3v-3h2l1.4-1.4a6.5 6.5 0 1 0-4-4Z"/><circle cx="16.5" cy="7.5" r=".5"/>',
+  building: '<rect width="16" height="20" x="4" y="2" rx="2"/><path d="M9 22v-4h6v4"/><path d="M8 6h.01"/><path d="M16 6h.01"/><path d="M12 6h.01"/><path d="M12 10h.01"/><path d="M12 14h.01"/><path d="M16 10h.01"/><path d="M16 14h.01"/><path d="M8 10h.01"/><path d="M8 14h.01"/>',
+  history: '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>',
+  locate: '<line x1="2" x2="5" y1="12" y2="12"/><line x1="19" x2="22" y1="12" y2="12"/><line x1="12" x2="12" y1="2" y2="5"/><line x1="12" x2="12" y1="19" y2="22"/><circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="3"/>',
+  flag: '<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" x2="4" y1="22" y2="15"/>',
+  copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>',
+  table: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 9h18"/><path d="M3 15h18"/><path d="M9 3v18"/>',
+  briefcase: '<rect width="20" height="14" x="2" y="7" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  wallet: '<path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1"/><path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4"/>',
+};
+
+function icon(name, cls) {
+  return '<svg class="ic ' + (cls || '') + '" viewBox="0 0 24 24" aria-hidden="true">' + (ICONS[name] || '') + '</svg>';
+}
+
+/* ---------- Utilitas ---------- */
+const ESC_MAP = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+function esc(v) {
+  return String(v === null || v === undefined ? '' : v).replace(/[&<>"']/g, c => ESC_MAP[c]);
+}
+function $(sel, root) { return (root || document).querySelector(sel); }
+function $$(sel, root) { return Array.prototype.slice.call((root || document).querySelectorAll(sel)); }
+function h(html) {
+  const t = document.createElement('template');
+  t.innerHTML = String(html).trim();
+  return t.content.firstElementChild;
+}
+function on(root, event, selector, handler) {
+  root.addEventListener(event, e => {
+    const t = e.target.closest(selector);
+    if (t && root.contains(t)) handler(e, t);
+  });
+}
+function debounce(fn, ms) {
+  let t;
+  return function () { const a = arguments; clearTimeout(t); t = setTimeout(() => fn.apply(null, a), ms); };
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+const Store = {
+  get(k) {
+    try { return sessionStorage.getItem(k) || localStorage.getItem(k); } catch (e) { return Store.mem[k] || null; }
+  },
+  set(k, v, persist) {
+    Store.mem[k] = v;
+    try { (persist ? localStorage : sessionStorage).setItem(k, v); } catch (e) { /* penyimpanan diblokir */ }
+  },
+  del(k) {
+    delete Store.mem[k];
+    try { sessionStorage.removeItem(k); localStorage.removeItem(k); } catch (e) { /* abaikan */ }
+  },
+  mem: {},
+};
+
+/* ---------- Cache data halaman ---------- */
+/*
+ * Data halaman yang pernah dibuka disimpan di browser per pengguna, di tempat yang sama
+ * dengan token (localStorage bila "ingat saya", selain itu sessionStorage). Halaman tampil
+ * seketika dari cache lalu diperbarui di belakang. Cache dibuang saat keluar atau sesi
+ * berakhir, setelah 12 jam, dan untuk domain data yang baru diubah. Foto tidak di-cache.
+ */
+const READ_ACTIONS = ['app.boot', 'dashboard.summary', 'employees.list', 'employees.get', 'attendance.history', 'attendance.list',
+  'jobs.list', 'leave.list', 'report.monthly', 'meta.options', 'work.list', 'bonus.list', 'bonus.form', 'bonus.schemes',
+  'rates.list', 'payroll.summary', 'settings.get', 'schedules.list', 'locations.list', 'users.list', 'audit.list'];
+/** Aksi yang tidak mengubah data dan tidak perlu di-cache. */
+const NEUTRAL_ACTIONS = ['time.now', 'auth.me', 'auth.login', 'auth.logout', 'notif.summary', 'attendance.state', 'attendance.begin',
+  'attendance.checkLocation', 'attendance.photo', 'work.photo', 'bonus.photo', 'app.prefetch'];
+/** Domain data yang ikut usang saat sebuah domain ditulis. Domain yang tidak terdaftar membuang semua cache. */
+const CACHE_DEPENDS = {
+  attendance: ['attendance', 'work', 'bonus'],
+  leave: ['leave', 'attendance'],
+  jobs: ['jobs'],
+  work: ['work'],
+  bonus: ['bonus'],
+  rates: ['rates', 'work'],
+  employees: ['app', 'employees', 'meta', 'users', 'attendance', 'work', 'bonus'],
+  users: ['app', 'users', 'employees'],
+  locations: ['locations', 'meta', 'attendance'],
+  schedules: ['schedules', 'meta', 'attendance'],
+  settings: ['app', 'settings', 'attendance'],
+};
+const CACHE_ALWAYS = ['dashboard', 'payroll', 'report'];
+
+function stableJson(v) {
+  if (Array.isArray(v)) return '[' + v.map(stableJson).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => JSON.stringify(k) + ':' + stableJson(v[k])).join(',') + '}';
+  return JSON.stringify(v === undefined ? null : v);
+}
+
+/** Tanda isi data untuk membandingkan versi lama & baru (cap waktu pembuatan diabaikan). */
+function cacheSig(d) {
+  return JSON.stringify(d === undefined ? null : d, (k, v) => (k === 'generatedAt' || k === 'serverTime' ? undefined : v));
+}
+
+const Cache = {
+  FRESH_MS: 30000,
+  MAX_AGE_MS: 12 * 3600e3,
+  MAX_ENTRY: 400000,
+  MAX_TOTAL: 1500000,
+  KEY: 'sdm_cache',
+  u: '',
+  e: {},
+  inflight: {},
+  key(action, payload) { return action + '|' + stableJson(payload || {}); },
+  store() {
+    try { return localStorage.getItem('sdm_token') ? localStorage : sessionStorage; } catch (e) { return null; }
+  },
+  load() {
+    this.e = {};
+    this.u = '';
+    try {
+      const s = this.store();
+      const raw = s && s.getItem(this.KEY);
+      if (!raw) return;
+      const o = JSON.parse(raw);
+      const now = Date.now();
+      this.u = o.u || '';
+      Object.keys(o.e || {}).forEach(k => { if (now - o.e[k].t < this.MAX_AGE_MS) this.e[k] = o.e[k]; });
+    } catch (e) { this.e = {}; }
+  },
+  persist() {
+    try {
+      const s = this.store();
+      if (!s || !this.u) return;
+      const out = {};
+      let size = 0;
+      Object.keys(this.e).sort((a, b) => this.e[b].t - this.e[a].t).forEach(k => {
+        const n = this.e[k].s.length + k.length;
+        if (size + n <= this.MAX_TOTAL) { out[k] = this.e[k]; size += n; }
+      });
+      s.setItem(this.KEY, JSON.stringify({ u: this.u, e: out }));
+    } catch (e) { /* penyimpanan penuh atau diblokir: cache tetap di memori */ }
+  },
+  /** Cache milik pengguna lain dibuang sebelum dipakai. */
+  owner(userId) {
+    if (this.u && this.u !== userId) this.clear();
+    this.u = userId;
+  },
+  get(k) {
+    const x = this.e[k];
+    return x && Date.now() - x.t < this.MAX_AGE_MS ? x : null;
+  },
+  read(x) { return JSON.parse(x.s); },
+  put(k, data) {
+    const s = JSON.stringify(data === undefined ? null : data);
+    if (s.length > this.MAX_ENTRY) { delete this.e[k]; return; }
+    this.e[k] = { t: Date.now(), s: s, g: cacheSig(data) };
+    this.save();
+  },
+  /** Dipanggil untuk setiap respons sukses: simpan hasil baca, atau buang data yang usang setelah perubahan. */
+  observe(action, payload, data) {
+    if (action === 'app.boot') return;
+    if (READ_ACTIONS.indexOf(action) >= 0) return this.put(this.key(action, payload), data);
+    if (NEUTRAL_ACTIONS.indexOf(action) >= 0) return;
+    const deps = CACHE_DEPENDS[action.split('.')[0]];
+    if (!deps) { this.e = {}; this.save(); return; }
+    const domains = deps.concat(CACHE_ALWAYS);
+    Object.keys(this.e).forEach(k => { if (domains.indexOf(k.split('.')[0]) >= 0) delete this.e[k]; });
+    this.save();
+    App.dataWritten();
+  },
+  clear() {
+    this.e = {};
+    this.u = '';
+    this.inflight = {};
+    try { localStorage.removeItem(this.KEY); sessionStorage.removeItem(this.KEY); } catch (e) { /* abaikan */ }
+  },
+};
+Cache.save = debounce(() => Cache.persist(), 400);
+
+/* ---------- API ---------- */
+class ApiError extends Error {
+  constructor(message, code) { super(message); this.code = code || 'ERROR'; }
+}
+
+function api(action, payload) {
+  return new Promise((resolve, reject) => {
+    const run = window.google && google.script && google.script.run;
+    if (!run) {
+      reject(new ApiError('Aplikasi harus dibuka melalui URL Web App Google Apps Script.', 'NO_GAS'));
+      return;
+    }
+    run
+      .withSuccessHandler(res => {
+        if (!res) return reject(new ApiError('Server tidak memberikan respons.', 'EMPTY'));
+        if (res.ok) {
+          Cache.observe(action, payload, res.data);
+          return resolve(res.data);
+        }
+        const err = new ApiError(res.error || 'Terjadi kesalahan.', res.code);
+        if (res.code === 'AUTH_REQUIRED' && action !== 'auth.login') App.sessionExpired(res.error);
+        else if (res.code === 'PASSWORD_CHANGE_REQUIRED') App.forcePasswordChange();
+        reject(err);
+      })
+      .withFailureHandler(() => reject(new ApiError('Tidak dapat terhubung ke server. Periksa koneksi internet Anda, lalu coba lagi.', 'NETWORK')))
+      .api(action, payload || {}, App.token);
+  });
+}
+
+/** Seperti api() untuk data halaman: dari cache seketika (bila ada), lalu diperbarui di belakang. */
+api.swr = function (action, payload) {
+  const k = Cache.key(action, payload);
+  const hit = Cache.get(k);
+  if (!hit) return api(action, payload);
+  if (Date.now() - hit.t > Cache.FRESH_MS) App.revalidate(action, payload, k, hit.g);
+  return Promise.resolve(Cache.read(hit));
+};
+
+/* ---------- Jam server ---------- */
+const BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+const BLN = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+const pad2 = n => (n < 10 ? '0' : '') + n;
+
+const Clock = {
+  base: null,
+  lastSync: 0,
+  rtt: 0,
+  pending: null,
+  started: false,
+  /** Menyetel jam dari objek waktu server yang ikut di respons lain (t0/t1 = performance.now()). */
+  adopt(r, t0, t1) {
+    if (!r || !r.epochMs) return;
+    const rtt = t1 - t0;
+    // Server mencatat waktu di awal eksekusi; pertengahan bolak-balik adalah perkiraan terbaik.
+    this.rtt = rtt;
+    this.base = { serverMs: r.epochMs + rtt / 2, perf: t1, tz: r.timezone, abbr: r.tzAbbr, offsetMin: r.offsetMin };
+    this.lastSync = t1;
+    document.dispatchEvent(new CustomEvent('clock:sync'));
+  },
+  /** Perkiraan jam dari selisih yang tersimpan, hanya untuk tampilan sampai sinkron (synced() tetap false). */
+  assume(c) {
+    if (this.base || !c || typeof c.skew !== 'number') return;
+    this.base = { serverMs: Date.now() + c.skew, perf: performance.now(), tz: c.tz, abbr: c.abbr, offsetMin: c.offsetMin };
+    this.lastSync = -1e9;
+  },
+  snapshot() {
+    return this.base ? { skew: Math.round(this.now() - Date.now()), tz: this.base.tz, abbr: this.base.abbr, offsetMin: this.base.offsetMin } : null;
+  },
+  sync() {
+    if (this.pending) return this.pending;
+    const t0 = performance.now();
+    this.pending = api('time.now').then(r => {
+      this.adopt(r, t0, performance.now());
+      return r;
+    });
+    const clear = () => { this.pending = null; };
+    this.pending.then(clear, clear);
+    return this.pending;
+  },
+  start() {
+    if (this.started) return;
+    this.started = true;
+    setInterval(() => this.sync().catch(() => {}), 60000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) this.sync().catch(() => {}); });
+  },
+  /** Epoch ms waktu server saat ini (null bila belum sinkron). */
+  now() { return this.base ? this.base.serverMs + (performance.now() - this.base.perf) : null; },
+  synced() { return !!this.base && performance.now() - this.lastSync < 150000; },
+  ageSec() { return this.base ? Math.round((performance.now() - this.lastSync) / 1000) : null; },
+  offset() { return this.base ? this.base.offsetMin : 420; },
+  abbr() { return this.base ? this.base.abbr : ''; },
+  /** Komponen tanggal/jam pada zona waktu perusahaan (bukan zona perangkat). */
+  parts(ms) {
+    const d = new Date(ms + this.offset() * 60000);
+    return { y: d.getUTCFullYear(), m: d.getUTCMonth() + 1, d: d.getUTCDate(), H: d.getUTCHours(), M: d.getUTCMinutes(), S: d.getUTCSeconds(), dow: d.getUTCDay() };
+  },
+  timeStr(ms) { const p = this.parts(ms); return pad2(p.H) + ':' + pad2(p.M) + ':' + pad2(p.S); },
+  dateStr(ms) { const p = this.parts(ms); return p.y + '-' + pad2(p.m) + '-' + pad2(p.d); },
+  dateLabel(ms) { const p = this.parts(ms); return HARI[p.dow] + ', ' + p.d + ' ' + BULAN[p.m - 1] + ' ' + p.y; },
+  today() { const n = this.now(); return n ? this.dateStr(n) : ''; },
+};
+
+/* ---------- Format ---------- */
+const Fmt = {
+  date(s) {
+    if (!s) return '–';
+    const p = String(s).split('-').map(Number);
+    return p[2] + ' ' + BLN[p[1] - 1] + ' ' + p[0];
+  },
+  dateLong(s) {
+    if (!s) return '–';
+    const p = String(s).split('-').map(Number);
+    const dow = new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay();
+    return HARI[dow] + ', ' + p[2] + ' ' + BULAN[p[1] - 1] + ' ' + p[0];
+  },
+  dayShort(s) {
+    const p = String(s).split('-').map(Number);
+    return HARI[new Date(Date.UTC(p[0], p[1] - 1, p[2])).getUTCDay()].slice(0, 3);
+  },
+  time(t) { return t ? String(t).slice(0, 5) : '–'; },
+  minutes(m) {
+    m = Math.round(Number(m) || 0);
+    if (m <= 0) return '0m';
+    const hh = Math.floor(m / 60), r = m % 60;
+    return (hh ? hh + 'j' : '') + (hh && r ? ' ' : '') + (r ? r + 'm' : '');
+  },
+  dist(m) {
+    if (m === null || m === undefined || m === '') return '–';
+    m = Number(m);
+    return m >= 1000 ? (m / 1000).toFixed(2).replace('.', ',') + ' km' : Math.round(m) + ' m';
+  },
+  num(n) { return Number(n || 0).toLocaleString('id-ID'); },
+  /** Timestamp ISO (UTC) → tanggal & jam zona perusahaan. */
+  iso(iso, withTime) {
+    if (!iso) return '–';
+    const ms = Date.parse(iso);
+    if (isNaN(ms)) return '–';
+    const p = Clock.parts(ms);
+    return p.d + ' ' + BLN[p.m - 1] + ' ' + p.y + (withTime === false ? '' : ', ' + pad2(p.H) + ':' + pad2(p.M));
+  },
+  month(m) { const p = String(m).split('-').map(Number); return BULAN[p[1] - 1] + ' ' + p[0]; },
+  rupiah(n) { return 'Rp ' + Math.round(Number(n) || 0).toLocaleString('id-ID'); },
+};
+
+/* ---------- Komponen UI ---------- */
+const AVATAR_TONES = [['#e8efff', '#1d4ed8'], ['#e6f6ee', '#15803d'], ['#fdf1e3', '#b45309'], ['#f3e8ff', '#7e22ce'],
+  ['#e0f2fe', '#0369a1'], ['#fde8ef', '#be185d'], ['#eef2f7', '#334155'], ['#e7f5f3', '#0f766e']];
+
+const BADGE_TONES = {
+  Hadir: 'success', Terlambat: 'warning', Izin: 'info', Sakit: 'info', Cuti: 'info', 'Dinas Luar': 'primary', Alpha: 'danger',
+  Aktif: 'success', Nonaktif: 'neutral', Menunggu: 'warning', Disetujui: 'success', Ditolak: 'danger', Dibatalkan: 'neutral',
+  Pending: 'neutral', 'In Progress': 'warning', Selesai: 'success', 'Pulang Cepat': 'warning', Normal: 'success',
+  Tinggi: 'danger', Sedang: 'warning', Rendah: 'neutral', SUCCESS: 'success', FAIL: 'danger', DENIED: 'warning',
+};
+
+const UI = {
+  initials(name) {
+    const w = String(name || '?').trim().split(/\s+/);
+    return ((w[0] || '?')[0] + (w.length > 1 ? w[w.length - 1][0] : '')).toUpperCase();
+  },
+  avatar(name, size) {
+    let hsh = 0;
+    String(name || '').split('').forEach(c => { hsh = (hsh * 31 + c.charCodeAt(0)) | 0; });
+    const t = AVATAR_TONES[Math.abs(hsh) % AVATAR_TONES.length];
+    return '<span class="avatar ' + (size ? 'avatar-' + size : '') + '" style="background:' + t[0] + ';color:' + t[1] + '" aria-hidden="true">' + esc(UI.initials(name)) + '</span>';
+  },
+  person(name, sub, size) {
+    return '<div class="person">' + UI.avatar(name, size) + '<div style="min-width:0"><div class="person-name">' + esc(name) + '</div>' +
+      (sub ? '<div class="person-sub">' + esc(sub) + '</div>' : '') + '</div></div>';
+  },
+  badge(text, tone) {
+    if (!text) return '<span class="faint">–</span>';
+    return '<span class="badge badge-' + (tone || BADGE_TONES[text] || 'neutral') + '">' + esc(text) + '</span>';
+  },
+  callout(tone, text, iconName) {
+    const ic = iconName || { info: 'info', warning: 'alert', danger: 'xCircle', success: 'checkCircle', neutral: 'info' }[tone];
+    return '<div class="callout callout-' + tone + '">' + icon(ic) + '<div>' + text + '</div></div>';
+  },
+  empty(iconName, title, text) {
+    return '<div class="empty"><div class="empty-icon">' + icon(iconName || 'info', 'ic-lg') + '</div><div class="empty-title">' + esc(title) + '</div>' +
+      (text ? '<div class="small">' + esc(text) + '</div>' : '') + '</div>';
+  },
+  /** Status memuat dengan teks (bukan blok abu-abu tiruan). */
+  loading(label) {
+    return '<div class="loading" data-loading role="status"><span class="spinner"></span><span>' + esc(label || 'Memuat data…') + '</span></div>';
+  },
+  errorBox(err, retryAttr) {
+    return '<div class="card"><div class="card-body">' + UI.callout('danger', esc(err && err.message ? err.message : String(err))) +
+      (retryAttr ? '<button class="btn btn-outline mt-3" ' + retryAttr + '>' + icon('refresh') + 'Coba lagi</button>' : '') + '</div></div>';
+  },
+  toast(msg, tone, ms) {
+    tone = tone || 'info';
+    const ic = { success: 'checkCircle', danger: 'xCircle', warning: 'alert', info: 'info' }[tone];
+    const el = h('<div class="toast toast-' + tone + '">' + icon(ic) + '<div>' + esc(msg) + '</div></div>');
+    $('#toasts').appendChild(el);
+    setTimeout(() => el.remove(), ms || (tone === 'danger' ? 6000 : 4000));
+  },
+  busy(btn, isBusy, label) {
+    if (!btn) return;
+    if (isBusy) {
+      btn.dataset.html = btn.innerHTML;
+      btn.classList.add('is-busy');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner"></span>' + esc(label || 'Memproses…');
+    } else {
+      btn.classList.remove('is-busy');
+      btn.disabled = false;
+      if (btn.dataset.html) btn.innerHTML = btn.dataset.html;
+    }
+  },
+  modalCount: 0,
+  /** Dialog modal. body/foot berupa HTML (sudah di-escape oleh pemanggil). */
+  modal(opts) {
+    const o = Object.assign({ size: '', dismissible: true }, opts);
+    const el = h('<div class="overlay" role="dialog" aria-modal="true" aria-label="' + esc(o.title) + '"><div class="dialog ' +
+      (o.size ? 'dialog-' + o.size : '') + '"><div class="dialog-head"><div class="dialog-title">' + esc(o.title) + '</div>' +
+      (o.dismissible ? '<button class="icon-btn" data-close aria-label="Tutup">' + icon('x') + '</button>' : '') +
+      '</div><div class="dialog-body"></div>' + (o.foot ? '<div class="dialog-foot"></div>' : '') + '</div></div>');
+    const body = $('.dialog-body', el);
+    if (typeof o.body === 'string') body.innerHTML = o.body; else if (o.body) body.appendChild(o.body);
+    const foot = $('.dialog-foot', el);
+    if (foot) foot.innerHTML = o.foot;
+    let closed = false;
+    const prev = document.activeElement;
+    const onKey = e => { if (e.key === 'Escape' && o.dismissible) close(); };
+    function close(result) {
+      if (closed) return;
+      closed = true;
+      el.remove();
+      document.removeEventListener('keydown', onKey);
+      UI.modalCount--;
+      if (!UI.modalCount) document.body.style.overflow = '';
+      if (o.onClose) o.onClose(result);
+      try { if (prev && prev.focus) prev.focus(); } catch (e) { /* abaikan */ }
+    }
+    el.addEventListener('click', e => {
+      if ((e.target === el && o.dismissible) || e.target.closest('[data-close]')) close();
+    });
+    document.addEventListener('keydown', onKey);
+    $('#modal-root').appendChild(el);
+    UI.modalCount++;
+    document.body.style.overflow = 'hidden';
+    const focusEl = $('input:not([type=hidden]):not([disabled]), select, textarea', body) || $('.dialog', el);
+    if (focusEl) { focusEl.setAttribute('tabindex', focusEl.getAttribute('tabindex') || '-1'); setTimeout(() => focusEl.focus(), 30); }
+    return { el, body, foot, close, isClosed: () => closed };
+  },
+  confirm(opts) {
+    return new Promise(resolve => {
+      let answered = false;
+      const m = UI.modal({
+        title: opts.title || 'Konfirmasi',
+        size: 'sm',
+        body: '<p>' + esc(opts.message) + '</p>',
+        foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn ' + (opts.tone === 'danger' ? 'btn-danger' : 'btn-primary') + '" data-ok>' + esc(opts.confirmText || 'Ya, lanjutkan') + '</button>',
+        onClose: () => { if (!answered) resolve(false); },
+      });
+      $('[data-ok]', m.el).addEventListener('click', () => { answered = true; m.close(); resolve(true); });
+    });
+  },
+  /** Nilai formulir: checkbox tunggal → boolean, checkbox bernama sama → array. */
+  formValues(form) {
+    const out = {};
+    const counts = {};
+    $$('[name]', form).forEach(el => { counts[el.name] = (counts[el.name] || 0) + 1; });
+    $$('[name]', form).forEach(el => {
+      if (el.type === 'checkbox') {
+        if (counts[el.name] > 1 || el.dataset.multi) { out[el.name] = out[el.name] || []; if (el.checked) out[el.name].push(el.value); }
+        else out[el.name] = el.checked;
+      } else if (el.type === 'radio') {
+        if (el.checked) out[el.name] = el.value;
+      } else out[el.name] = el.value.trim();
+    });
+    return out;
+  },
+  options(list, selected, placeholder) {
+    let s = placeholder !== undefined ? '<option value="">' + esc(placeholder) + '</option>' : '';
+    list.forEach(o => {
+      const v = typeof o === 'object' ? o.value : o;
+      const l = typeof o === 'object' ? o.label : o;
+      s += '<option value="' + esc(v) + '"' + (String(v) === String(selected) ? ' selected' : '') + '>' + esc(l) + '</option>';
+    });
+    return s;
+  },
+  /** Menampilkan nilai rahasia sekali (password sementara). */
+  secret(title, intro, value, note) {
+    const m = UI.modal({
+      title: title, size: 'sm',
+      body: '<p>' + esc(intro) + '</p><div class="code-box mt-3"><input readonly value="' + esc(value) + '" aria-label="Password sementara"><button class="btn btn-sm btn-outline" data-copy>' + icon('copy', 'ic-sm') + 'Salin</button></div>' +
+        '<div class="mt-3">' + UI.callout('warning', esc(note || 'Password ini hanya ditampilkan sekali. Sampaikan secara langsung kepada pemilik akun; sistem akan memintanya mengganti password saat login pertama.')) + '</div>',
+      foot: '<button class="btn btn-primary" data-close>Selesai</button>',
+    });
+    $('[data-copy]', m.el).addEventListener('click', () => {
+      const input = $('input', m.el);
+      input.select();
+      const done = () => UI.toast('Password disalin.', 'success');
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(value).then(done, () => { try { document.execCommand('copy'); done(); } catch (e) { /* abaikan */ } });
+      else { try { document.execCommand('copy'); done(); } catch (e) { /* abaikan */ } }
+    });
+  },
+};
+
+/** Ekspor CSV (pemisah ; agar langsung terbaca Excel berbahasa Indonesia). */
+function downloadCsv(filename, header, rows) {
+  const cell = v => {
+    let s = v === null || v === undefined ? '' : String(v);
+    if (/^[=+\-@]/.test(s)) s = "'" + s; // cegah formula injection saat dibuka di spreadsheet
+    return /[;"\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const csv = '﻿' + [header].concat(rows).map(r => r.map(cell).join(';')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.style.display = 'none';
+  document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+}
+
+/* ---------- Tabel data (pencarian & paginasi di browser) ---------- */
+function DataTable(opts) {
+  const o = Object.assign({ pageSize: 10, searchKeys: [], searchPlaceholder: 'Cari…', tools: '', empty: { icon: 'search', title: 'Tidak ada data', text: '' } }, opts);
+  const el = h('<div>' +
+    ((o.searchKeys.length || o.tools) ? '<div class="table-tools">' + (o.searchKeys.length ? '<label class="input-icon">' + icon('search') +
+      '<span class="sr-only">Cari</span><input class="input" type="search" placeholder="' + esc(o.searchPlaceholder) + '" data-q></label>' : '') + o.tools + '</div>' : '') +
+    '<div class="table-wrap"><table class="table"><thead></thead><tbody></tbody><tfoot></tfoot></table></div><div class="table-foot"></div></div>');
+  let rows = o.rows || [];
+  let page = 1;
+  let q = '';
+  const filtered = () => {
+    if (!q) return rows;
+    const t = q.toLowerCase();
+    return rows.filter(r => o.searchKeys.some(k => String(r[k] === null || r[k] === undefined ? '' : r[k]).toLowerCase().indexOf(t) >= 0));
+  };
+  function render() {
+    $('thead', el).innerHTML = '<tr>' + o.columns.map(c => '<th class="' + (c.cls || '') + '">' + esc(c.label) + '</th>').join('') + '</tr>';
+    const list = filtered();
+    const pages = Math.max(1, Math.ceil(list.length / o.pageSize));
+    if (page > pages) page = pages;
+    const start = (page - 1) * o.pageSize;
+    const slice = list.slice(start, start + o.pageSize);
+    $('tbody', el).innerHTML = slice.length
+      ? slice.map((r, i) => '<tr>' + o.columns.map(c => '<td class="' + (c.cls || '') + '">' + (c.render ? c.render(r, start + i) : esc(r[c.key])) + '</td>').join('') + '</tr>').join('')
+      : '<tr><td colspan="' + o.columns.length + '">' + UI.empty(o.empty.icon, q ? 'Tidak ada hasil untuk "' + q + '"' : o.empty.title, q ? '' : o.empty.text) + '</td></tr>';
+    $('tfoot', el).innerHTML = o.footer && list.length ? o.footer(list) : '';
+    const foot = $('.table-foot', el);
+    if (list.length <= o.pageSize) {
+      foot.innerHTML = list.length ? '<span class="small muted">' + list.length + ' data</span>' : '';
+      foot.classList.toggle('hidden', !list.length);
+    } else {
+      foot.classList.remove('hidden');
+      let btns = '<button data-p="' + (page - 1) + '" ' + (page === 1 ? 'disabled' : '') + ' aria-label="Sebelumnya">‹</button>';
+      const from = Math.max(1, Math.min(page - 2, pages - 4));
+      for (let p = from; p <= Math.min(pages, from + 4); p++) btns += '<button data-p="' + p + '" class="' + (p === page ? 'is-active' : '') + '">' + p + '</button>';
+      btns += '<button data-p="' + (page + 1) + '" ' + (page === pages ? 'disabled' : '') + ' aria-label="Berikutnya">›</button>';
+      foot.innerHTML = '<span class="small muted">Menampilkan ' + (start + 1) + '–' + Math.min(list.length, start + o.pageSize) + ' dari ' + list.length + ' data</span><div class="pager">' + btns + '</div>';
+    }
+    if (o.onRender) o.onRender(el);
+  }
+  const qInput = $('[data-q]', el);
+  if (qInput) qInput.addEventListener('input', debounce(() => { q = qInput.value.trim(); page = 1; render(); }, 150));
+  on(el, 'click', '[data-p]', (e, b) => { if (!b.disabled) { page = Number(b.dataset.p); render(); } });
+  render();
+  return { el, render, setRows(r) { rows = r || []; render(); }, rows: () => rows };
+}
+
+/* ---------- Navigasi ---------- */
+/** Hanya Super Admin & HRD yang melihat data karyawan lain (dijaga juga di server). */
+const STAFF_ROLES = ['admin', 'hr'];
+const NAV = [
+  { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'karyawan', label: 'Karyawan', icon: 'users', roles: STAFF_ROLES },
+  { id: 'absensi', label: 'Absensi', icon: 'scan' },
+  { id: 'jobdesk', label: 'Jobdesk', icon: 'clipboard' },
+  { id: 'izin', label: 'Izin & Cuti', icon: 'calendar' },
+  { id: 'gaji', label: 'Gaji', icon: 'wallet' },
+  { id: 'laporan', label: 'Laporan', icon: 'report', roles: STAFF_ROLES },
+  { id: 'profil', label: 'Profil Saya', icon: 'user' },
+  { id: 'pengaturan', label: 'Pengaturan', icon: 'settings', roles: ['admin'] },
+];
+const Pages = {};
+
+const App = {
+  token: null,
+  user: null,
+  company: { companyName: BOOT.companyName },
+  page: null,
+  pageId: '',
+  gen: 0,
+  notif: { items: [], count: 0 },
+  routeSeq: 0,
+  routeParam: '',
+  touchedSeq: -1,
+  syncCount: 0,
+
+  async start() {
+    this.token = Store.get('sdm_token');
+    Clock.start();
+    window.addEventListener('hashchange', () => { if (this.user && !this.user.mustChangePassword) this.route(); });
+    // Web app Apps Script berjalan di dalam iframe: tautan menu ditangani di sini agar
+    // tidak pernah membuka URL iframe di tab utama (layar putih).
+    document.addEventListener('click', e => {
+      const a = e.target.closest ? e.target.closest('a[href^="#/"]') : null;
+      if (!a) return;
+      e.preventDefault();
+      const m = /^#\/([a-z]+)(?:\/([^/?#]+))?/.exec(a.getAttribute('href'));
+      if (m && this.user) this.go(m[1], m[2] ? decodeURIComponent(m[2]) : '');
+    });
+    if (!this.token) return this.showLogin();
+    Cache.load();
+    const cached = Cache.get('app.boot');
+    if (cached) {
+      // Buka seketika dari data terakhir, lalu cocokkan dengan server di belakang.
+      const b = Cache.read(cached);
+      Clock.assume(b.clock);
+      this.applyBoot(b, null, null, true);
+      this.afterLogin(true);
+      this.refreshBoot();
+      return;
+    }
+    $('#app').innerHTML = '<div class="auth-main" style="min-height:100vh"><div class="row muted"><span class="spinner"></span> Memuat…</div></div>';
+    try {
+      const t0 = performance.now();
+      const boot = await api('app.boot', { page: this.parseHash().id });
+      this.applyBoot(boot, t0, performance.now());
+      this.afterLogin(true);
+      this.schedulePrefetch();
+    } catch (e) {
+      if (e.code === 'AUTH_REQUIRED') return;
+      if (e.code === 'PASSWORD_CHANGE_REQUIRED') return;
+      this.showLogin(e.message);
+    }
+  },
+
+  applyBoot(b, t0, t1, fromCache) {
+    this.user = b.user;
+    if (b.company) this.company = b.company;
+    if (b.notif) this.notif = b.notif;
+    if (fromCache) return;
+    if (b.time) Clock.adopt(b.time, t0, t1);
+    Cache.owner(b.user.userId);
+    const pre = b.prefetch || {};
+    Object.keys(pre).forEach(a => Cache.put(Cache.key(a, {}), pre[a]));
+    if (!b.user.mustChangePassword) Cache.put('app.boot', { user: b.user, company: this.company, notif: this.notif, clock: Clock.snapshot() });
+  },
+
+  /** Boot dari cache: ambil data pengguna terbaru; tampilan diganti hanya bila ada yang berubah. */
+  async refreshBoot() {
+    const before = stableJson(this.user);
+    const t0 = performance.now();
+    try {
+      const b = await api('app.boot', { page: '-' });
+      this.applyBoot(b, t0, performance.now());
+      if (this.user.mustChangePassword) return this.forcePasswordChange();
+      if (stableJson(this.user) !== before) { this.renderShell(); this.route(); } else this.showNotif();
+      this.schedulePrefetch();
+    } catch (e) { /* sesi berakhir ditangani api(); jaringan putus: tetap tampilkan data terakhir */ }
+  },
+
+  /** Mengambil data halaman lain yang kemungkinan dibuka, dalam satu panggilan server. */
+  schedulePrefetch(delay) {
+    clearTimeout(this.prefetchTimer);
+    this.prefetchTimer = setTimeout(() => this.prefetchPages(), delay || 1500);
+  },
+  async prefetchPages() {
+    if (!this.user || this.user.mustChangePassword || typeof prefetchPlan !== 'function') return;
+    const today = Clock.today();
+    if (!today) return;
+    const items = prefetchPlan(this.user, today).map(it => Object.assign({ key: Cache.key(it.action, it.payload) }, it))
+      .filter(it => { const x = Cache.get(it.key); return !x || Date.now() - x.t > Cache.FRESH_MS; });
+    if (!items.length) return;
+    try {
+      const res = await api('app.prefetch', { items: items });
+      Object.keys(res.results || {}).forEach(k => { if (res.results[k].ok) Cache.put(k, res.results[k].data); });
+    } catch (e) { /* hanya percepatan */ }
+  },
+  /** Setelah data diubah, isi ulang cache halaman lain di belakang. */
+  dataWritten() {
+    if (this.user) this.schedulePrefetch(2500);
+  },
+
+  /** Perbarui data halaman di belakang; render ulang bila isinya berubah. */
+  revalidate(action, payload, k, sig) {
+    if (Cache.inflight[k]) return;
+    const seq = this.routeSeq;
+    Cache.inflight[k] = true;
+    this.syncing(1);
+    api(action, payload).then(data => { if (cacheSig(data) !== sig) this.dataChanged(seq); }, () => {})
+      .then(() => { delete Cache.inflight[k]; this.syncing(-1); });
+  },
+  dataChanged(seq) {
+    if (seq !== this.routeSeq || !this.page) return;
+    clearTimeout(this.refreshTimer);
+    this.refreshTimer = setTimeout(() => this.softRefresh(seq), 60);
+  },
+  /** Render ulang halaman aktif dengan data baru tanpa layar memuat dan tanpa pindah posisi gulir. */
+  softRefresh(seq) {
+    if (seq !== this.routeSeq || !this.page) return;
+    // Pengguna sedang mengisi atau membuka dialog: jangan ganggu, tawarkan muat ulang.
+    if (this.touchedSeq === seq || $('.overlay') || document.hidden) return this.showSync('stale');
+    const oldView = $('#view');
+    const y = window.scrollY;
+    if (this.page.destroy) { try { this.page.destroy(); } catch (e) { /* abaikan */ } }
+    this.gen++;
+    const gen = this.gen;
+    const view = oldView.cloneNode(false);
+    let done = false;
+    const swap = () => {
+      if (done || !this.alive(gen) || !oldView.parentNode) return;
+      done = true;
+      oldView.parentNode.replaceChild(view, oldView);
+      window.scrollTo(0, y);
+      this.watchTouch(view, seq);
+    };
+    const timer = setTimeout(swap, 4000);
+    Promise.resolve()
+      .then(() => this.page.render(view, this.routeParam, gen))
+      .then(() => { clearTimeout(timer); swap(); }, () => { clearTimeout(timer); if (this.alive(gen)) this.route(); });
+  },
+  watchTouch(view, seq) {
+    const mark = () => { this.touchedSeq = seq; };
+    ['input', 'change', 'keydown', 'click'].forEach(ev => view.addEventListener(ev, mark, true));
+  },
+  syncing(d) {
+    this.syncCount = Math.max(0, this.syncCount + d);
+    const el = $('#sync-ind');
+    if (el && el.dataset.state !== 'stale') this.showSync(this.syncCount ? 'busy' : '');
+  },
+  showSync(state) {
+    const el = $('#sync-ind');
+    if (!el) return;
+    el.dataset.state = state || '';
+    el.classList.toggle('hidden', !state);
+    el.innerHTML = state === 'stale' ? '<button type="button" class="sync-btn" data-action="reload-view">' + icon('refresh', 'ic-sm') + '<span>Data baru · muat ulang</span></button>'
+      : state === 'busy' ? '<span class="spinner" aria-hidden="true"></span><span class="sync-text">Memperbarui</span>' : '';
+  },
+
+  can(id) {
+    const n = NAV.find(x => x.id === id);
+    if (!n) return !!Pages[id];
+    return !n.roles || n.roles.indexOf(this.user.role) >= 0;
+  },
+
+  afterLogin(hasNotif) {
+    if (this.user.mustChangePassword) return this.forcePasswordChange();
+    this.renderShell();
+    this.route();
+    if (hasNotif) this.showNotif(); else this.refreshNotif();
+    if (!Clock.synced()) Clock.sync().catch(() => {});
+  },
+
+  sessionExpired(msg) {
+    if (!this.user && !this.token) return;
+    this.teardownPage();
+    this.token = null;
+    this.user = null;
+    Store.del('sdm_token');
+    Cache.clear();
+    this.showLogin(msg || 'Sesi Anda telah berakhir. Silakan masuk kembali.');
+  },
+
+  async logout() {
+    try { await api('auth.logout'); } catch (e) { /* tetap keluar */ }
+    this.teardownPage();
+    Store.del('sdm_token');
+    Cache.clear();
+    this.token = null;
+    this.user = null;
+    history.replaceState(null, '', location.pathname + location.search);
+    this.showLogin();
+  },
+
+  teardownPage() {
+    if (this.page && this.page.destroy) { try { this.page.destroy(); } catch (e) { /* abaikan */ } }
+    this.page = null;
+    this.pageId = '';
+    this.gen++;
+  },
+
+  parseHash() {
+    const m = /^#\/([a-z]+)(?:\/([^/?#]+))?/.exec(location.hash || '');
+    return m ? { id: m[1], param: decodeURIComponent(m[2] || '') } : { id: 'dashboard', param: '' };
+  },
+
+  go(id, param) {
+    const hash = '#/' + id + (param ? '/' + encodeURIComponent(param) : '');
+    if (location.hash === hash) this.route(); else location.hash = hash;
+  },
+
+  route() {
+    let r = this.parseHash();
+    if (!Pages[r.id] || !this.can(r.id)) r = { id: 'dashboard', param: '' };
+    this.teardownPage();
+    const gen = this.gen;
+    this.page = Pages[r.id];
+    this.pageId = r.id;
+    this.routeSeq++;
+    this.routeParam = r.param;
+    this.showSync(this.syncCount ? 'busy' : '');
+    $$('[data-nav]').forEach(b => b.classList.toggle('is-active', b.dataset.nav === r.id));
+    const nav = NAV.find(n => n.id === r.id);
+    $('#topbar-title').textContent = nav ? nav.label : (this.page.title || '');
+    this.closeSidebar();
+    // Elemen #view diganti baru setiap pindah halaman agar listener delegasi milik
+    // halaman sebelumnya tidak menumpuk (mencegah dialog ganda / aksi terkirim dua kali).
+    const oldView = $('#view');
+    const view = oldView.cloneNode(false);
+    oldView.parentNode.replaceChild(view, oldView);
+    view.innerHTML = UI.loading('Memuat ' + (nav ? nav.label.toLowerCase() : 'halaman') + '…');
+    window.scrollTo(0, 0);
+    this.watchTouch(view, this.routeSeq);
+    Promise.resolve()
+      .then(() => this.page.render(view, r.param, gen))
+      .catch(err => { if (this.alive(gen)) view.innerHTML = UI.errorBox(err); });
+  },
+
+  /** Apakah halaman yang dirender dengan nomor gen masih aktif. */
+  alive(gen) { return gen === this.gen; },
+
+  openSidebar() { $('#sidebar').classList.add('is-open'); $('#sidebar-backdrop').classList.add('is-open'); },
+  closeSidebar() { const s = $('#sidebar'); if (s) { s.classList.remove('is-open'); $('#sidebar-backdrop').classList.remove('is-open'); } },
+
+  renderShell() {
+    const u = this.user;
+    const navHtml = NAV.filter(n => this.can(n.id)).map(n =>
+      '<a href="#/' + n.id + '" class="nav-item" data-nav="' + n.id + '">' + icon(n.icon) + '<span>' + esc(n.label) + '</span>' +
+      (n.id === 'izin' ? '<span class="nav-count hidden" data-leave-count></span>' : '') +
+      (n.id === 'gaji' ? '<span class="nav-count hidden" data-work-count></span>' : '') + '</a>').join('');
+    const bn = (id, label, ic) => '<a href="#/' + id + '" class="bn-item" data-nav="' + id + '">' + icon(ic) + '<span>' + label + '</span></a>';
+    $('#app').innerHTML =
+      '<div class="shell">' +
+      '<aside class="sidebar" id="sidebar" aria-label="Navigasi utama">' +
+        '<div class="brand"><span class="brand-logo" style="width:42px;height:42px" role="img" aria-label="Logo ' + esc(this.company.companyName) + '"></span><div style="min-width:0"><div class="brand-name">' + esc(this.company.companyName) + '</div><div class="brand-sub">HR &amp; Attendance</div></div></div>' +
+        '<nav class="nav">' + navHtml + '</nav>' +
+        '<div class="sidebar-foot">' + UI.avatar(u.nama) + '<div class="grow"><div class="person-name">' + esc(u.nama) + '</div><div class="person-sub">' + esc(u.roleLabel) + '</div></div>' +
+        '<button class="icon-btn" data-action="logout" title="Keluar" aria-label="Keluar">' + icon('logout') + '</button></div>' +
+      '</aside>' +
+      '<div class="sidebar-backdrop" id="sidebar-backdrop"></div>' +
+      '<div class="main">' +
+        '<header class="topbar">' +
+          '<button class="icon-btn menu-btn" data-action="menu" aria-label="Buka menu">' + icon('menu') + '</button>' +
+          '<span class="brand-logo topbar-logo" style="width:34px;height:34px" role="img" aria-label="Logo ' + esc(this.company.companyName) + '"></span>' +
+          '<div class="topbar-title" id="topbar-title"></div>' +
+          '<div class="topbar-right">' +
+            '<span class="sync-ind hidden" id="sync-ind" role="status" aria-live="polite"></span>' +
+            '<span class="topbar-date num" id="topbar-date"></span>' +
+            '<div class="rel"><button class="icon-btn" data-action="notif" aria-label="Notifikasi">' + icon('bell') + '<span class="notif-dot hidden" id="notif-dot"></span></button></div>' +
+            '<div class="rel"><button class="icon-btn" data-action="account" aria-label="Akun" style="width:auto;padding:0 4px">' + UI.avatar(u.nama) + '</button></div>' +
+          '</div>' +
+        '</header>' +
+        '<main class="content" id="view"></main>' +
+      '</div>' +
+      '<nav class="bottom-nav" aria-label="Navigasi bawah">' + bn('dashboard', 'Beranda', 'dashboard') + bn('jobdesk', 'Jobdesk', 'clipboard') +
+        '<a href="#/absensi" class="bn-item bn-main" data-nav="absensi"><span class="bn-circle">' + icon('scan') + '</span><span>Absen</span></a>' +
+        bn('izin', 'Izin', 'calendar') + '<button class="bn-item" data-action="menu">' + icon('menu') + '<span>Menu</span></button></nav>' +
+      '</div>';
+
+    const app = $('#app');
+    on(app, 'click', '[data-action="menu"]', () => this.openSidebar());
+    on(app, 'click', '[data-action="reload-view"]', () => { this.showSync(''); this.route(); });
+    on(app, 'click', '#sidebar-backdrop', () => this.closeSidebar());
+    on(app, 'click', '[data-action="logout"]', async () => {
+      if (await UI.confirm({ title: 'Keluar', message: 'Keluar dari aplikasi di perangkat ini?', confirmText: 'Keluar' })) this.logout();
+    });
+    on(app, 'click', '[data-action="notif"]', (e, b) => this.toggleDropdown(b.parentNode, this.notifMenu()));
+    on(app, 'click', '[data-action="account"]', (e, b) => this.toggleDropdown(b.parentNode, this.accountMenu()));
+
+    const updateDate = () => { const n = Clock.now(); const el = $('#topbar-date'); if (el && n) el.textContent = Clock.dateLabel(n); };
+    updateDate();
+    document.addEventListener('clock:sync', updateDate);
+    clearInterval(this.dateTimer);
+    this.dateTimer = setInterval(updateDate, 30000);
+    clearInterval(this.notifTimer);
+    this.notifTimer = setInterval(() => this.refreshNotif(), 5 * 60000);
+  },
+
+  toggleDropdown(anchor, html) {
+    const open = $('.dropdown');
+    if (open) { const same = open.parentNode === anchor; open.remove(); if (same) return; }
+    const dd = h('<div class="dropdown">' + html + '</div>');
+    anchor.appendChild(dd);
+    const close = e => { if (!dd.contains(e.target) && !anchor.contains(e.target)) { dd.remove(); document.removeEventListener('click', close, true); } };
+    setTimeout(() => document.addEventListener('click', close, true), 0);
+    on(dd, 'click', '[data-go]', (e, b) => { dd.remove(); this.go(b.dataset.go); });
+    on(dd, 'click', '[data-do]', (e, b) => {
+      dd.remove();
+      if (b.dataset.do === 'password') this.changePasswordDialog();
+      if (b.dataset.do === 'logout') this.logout();
+    });
+  },
+
+  notifMenu() {
+    const items = this.notif.items;
+    if (!items.length) return '<div class="dropdown-head"><div class="strong">Notifikasi</div></div><div class="small muted" style="padding:10px">Tidak ada notifikasi baru.</div>';
+    return '<div class="dropdown-head"><div class="strong">Notifikasi</div></div>' + items.map(n =>
+      '<button class="dropdown-item" data-go="' + esc(n.route) + '"><span class="badge badge-' + esc(n.tone) + ' no-dot" style="width:8px;height:8px;padding:0"></span>' + esc(n.text) + '</button>').join('');
+  },
+
+  accountMenu() {
+    const u = this.user;
+    return '<div class="dropdown-head">' + UI.person(u.nama, u.roleLabel + ' · ' + u.username) + '</div>' +
+      '<button class="dropdown-item" data-go="profil">' + icon('user') + 'Profil saya</button>' +
+      '<button class="dropdown-item" data-do="password">' + icon('key') + 'Ubah password</button>' +
+      '<button class="dropdown-item" data-do="logout">' + icon('logout') + 'Keluar</button>';
+  },
+
+  async refreshNotif() {
+    try {
+      this.notif = await api('notif.summary');
+      this.showNotif();
+    } catch (e) { /* tidak kritis */ }
+  },
+
+  showNotif() {
+    {
+      const dot = $('#notif-dot');
+      if (dot) { dot.textContent = this.notif.count; dot.classList.toggle('hidden', !this.notif.count); }
+      const leave = this.notif.items.filter(i => i.route === 'izin')[0];
+      const lc = $('[data-leave-count]');
+      if (lc) { const n = leave ? parseInt(leave.text, 10) : 0; lc.textContent = n; lc.classList.toggle('hidden', !n); }
+      const pay = this.notif.items.filter(i => i.route === 'gaji' || i.route === 'gaji/bonus');
+      const wc = $('[data-work-count]');
+      if (wc) { const n = pay.reduce((s, i) => s + (parseInt(i.text, 10) || 0), 0); wc.textContent = n; wc.classList.toggle('hidden', !n); }
+    }
+  },
+
+  /* ---------- Login ---------- */
+  showLogin(msg) {
+    // Membangunkan server Google selagi pengguna mengetik, agar login tidak menunggu "cold start".
+    Clock.sync().catch(() => {});
+    const c = esc(this.company.companyName || BOOT.companyName);
+    $('#app').innerHTML =
+      '<div class="auth">' +
+        '<section class="auth-side">' +
+          '<div class="row" style="gap:16px"><span class="brand-logo" style="width:84px;height:84px" role="img" aria-label="Logo ' + c + '"></span><div><div class="brand-name">' + c + '</div><div class="brand-sub">HR &amp; Attendance</div></div></div>' +
+          '<h1>Absensi dan data tim ' + c + ', tercatat rapi setiap hari.</h1>' +
+          '<div class="auth-points">' +
+            '<div class="auth-point">' + icon('camera') + '<div><strong>Selfie saat absen</strong>Foto dicap nama, jam server, dan lokasi. Foto yang sama tidak bisa dipakai dua kali.</div></div>' +
+            '<div class="auth-point">' + icon('pin') + '<div><strong>Lokasi diverifikasi server</strong>Jarak ke kantor dihitung ulang di server sebelum absensi disimpan.</div></div>' +
+            '<div class="auth-point">' + icon('clock') + '<div><strong>Jam mengikuti server</strong>Mengubah jam di ponsel tidak memengaruhi waktu absensi.</div></div>' +
+          '</div>' +
+        '</section>' +
+        '<main class="auth-main"><div class="auth-card">' +
+          '<div class="auth-brand-mobile"><span class="brand-logo" style="width:88px;height:88px" role="img" aria-label="Logo ' + c + '"></span><div class="strong mt-2">' + c + '</div><div class="small muted">HR &amp; Attendance</div></div>' +
+          '<div class="card"><div class="card-body">' +
+            '<div class="auth-title">Masuk</div><p class="muted mt-1">Gunakan akun yang diberikan oleh HR atau Admin ' + c + '.</p>' +
+            (msg ? '<div class="mt-4">' + UI.callout('warning', esc(msg)) + '</div>' : '') +
+            '<form id="login-form" class="mt-6" novalidate style="display:grid;gap:16px">' +
+              '<label class="field"><span class="label">Username</span><input class="input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>' +
+              '<label class="field"><span class="label">Password</span><span class="rel"><input class="input" name="password" type="password" autocomplete="current-password" required style="padding-right:44px">' +
+                '<button type="button" class="icon-btn pw-toggle" data-toggle-pw aria-label="Tampilkan password">' + icon('eye') + '</button></span></label>' +
+              '<label class="check"><input type="checkbox" name="remember"> Ingat saya di perangkat ini</label>' +
+              '<div id="login-error"></div>' +
+              '<button class="btn btn-primary btn-lg btn-block" type="submit">' + icon('login') + 'Masuk</button>' +
+            '</form>' +
+          '</div><div class="card-foot small muted">Lupa password? Hubungi HR atau Admin untuk reset.</div></div>' +
+        '</div></main>' +
+      '</div>';
+    const form = $('#login-form');
+    on(form, 'click', '[data-toggle-pw]', (e, b) => {
+      const inp = $('[name=password]', form);
+      const show = inp.type === 'password';
+      inp.type = show ? 'text' : 'password';
+      b.innerHTML = icon(show ? 'eyeOff' : 'eye');
+    });
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const v = UI.formValues(form);
+      const errBox = $('#login-error');
+      errBox.innerHTML = '';
+      if (!v.username || !v.password) { errBox.innerHTML = UI.callout('danger', 'Username dan password wajib diisi.'); return; }
+      const btn = $('button[type=submit]', form);
+      UI.busy(btn, true, 'Memeriksa…');
+      try {
+        const t0 = performance.now();
+        const r = await api('auth.login', { username: v.username, password: $('[name=password]', form).value, page: this.parseHash().id });
+        this.token = r.token;
+        Store.set('sdm_token', r.token, v.remember);
+        this.applyBoot(r, t0, performance.now());
+        this.afterLogin(!!r.notif);
+        if (!r.user.mustChangePassword) this.schedulePrefetch();
+      } catch (err) {
+        UI.busy(btn, false);
+        errBox.innerHTML = UI.callout('danger', esc(err.message));
+      }
+    });
+    setTimeout(() => { const u = $('[name=username]', form); if (u) u.focus(); }, 50);
+  },
+
+  passwordFields() {
+    return '<label class="field"><span class="label">Password saat ini</span><input class="input" type="password" name="oldPassword" autocomplete="current-password" required></label>' +
+      '<label class="field"><span class="label">Password baru</span><input class="input" type="password" name="newPassword" autocomplete="new-password" required><span class="hint">Minimal 8 karakter, berisi huruf dan angka.</span></label>' +
+      '<label class="field"><span class="label">Ulangi password baru</span><input class="input" type="password" name="confirm" autocomplete="new-password" required></label>';
+  },
+
+  async submitPassword(form, btn) {
+    const v = UI.formValues(form);
+    if (v.newPassword !== v.confirm) throw new ApiError('Konfirmasi password baru tidak sama.', 'VALIDATION');
+    UI.busy(btn, true, 'Menyimpan…');
+    try {
+      const r = await api('auth.changePassword', { oldPassword: $('[name=oldPassword]', form).value, newPassword: $('[name=newPassword]', form).value });
+      this.token = r.token;
+      this.user = r.user;
+      Store.set('sdm_token', r.token, !!(function () { try { return localStorage.getItem('sdm_token'); } catch (e) { return null; } })());
+      return r;
+    } finally { UI.busy(btn, false); }
+  },
+
+  forcePasswordChange() {
+    this.teardownPage();
+    $('#app').innerHTML =
+      '<div class="auth-main" style="min-height:100vh"><div class="auth-card">' +
+        '<div class="auth-brand-mobile" style="display:flex"><span class="brand-logo" style="width:72px;height:72px" role="img" aria-label="Logo"></span></div>' +
+        '<div class="card"><div class="card-body">' +
+          '<div class="row" style="gap:12px"><div class="stat-icon tone-amber">' + icon('key') + '</div><div><div class="auth-title" style="font-size:19px">Ganti password sementara</div>' +
+          '<p class="muted small">Demi keamanan, buat password baru sebelum melanjutkan.</p></div></div>' +
+          '<form id="pw-form" class="mt-6" style="display:grid;gap:14px" novalidate>' + this.passwordFields() +
+            '<div id="pw-error"></div><button class="btn btn-primary btn-lg btn-block" type="submit">Simpan password baru</button>' +
+            '<button class="btn btn-ghost btn-block" type="button" data-logout>Keluar</button></form>' +
+        '</div></div></div></div>';
+    const form = $('#pw-form');
+    $('[data-logout]', form).addEventListener('click', () => this.logout());
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      $('#pw-error').innerHTML = '';
+      try {
+        await this.submitPassword(form, $('button[type=submit]', form));
+        UI.toast('Password berhasil diganti.', 'success');
+        this.afterLogin();
+      } catch (err) { $('#pw-error').innerHTML = UI.callout('danger', esc(err.message)); }
+    });
+  },
+
+  changePasswordDialog() {
+    const m = UI.modal({
+      title: 'Ubah password', size: 'sm',
+      body: '<form style="display:grid;gap:14px" novalidate>' + this.passwordFields() + '<div data-err></div></form>',
+      foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>Simpan</button>',
+    });
+    const form = $('form', m.el);
+    const save = async () => {
+      $('[data-err]', m.el).innerHTML = '';
+      try {
+        await this.submitPassword(form, $('[data-save]', m.el));
+        m.close();
+        UI.toast('Password berhasil diganti.', 'success');
+      } catch (err) { $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(err.message)); }
+    };
+    $('[data-save]', m.el).addEventListener('click', save);
+    form.addEventListener('submit', e => { e.preventDefault(); save(); });
+  },
+};
+</script>

@@ -1,0 +1,22 @@
+{
+  "name": "ggshops-sdm-absensi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Aplikasi SDM & Absensi (Google Apps Script + Google Sheets + Google Drive)",
+  "scripts": {
+    "test": "node --test tests/backend.test.js tests/payroll.test.js tests/lampiran.test.js tests/privasi.test.js tests/bonus.test.js tests/speed.test.js",
+    "test:e2e": "node --test --test-concurrency=1 tests/e2e.test.js",
+    "test:klik": "node --test --test-concurrency=1 tests/clickthrough.test.js",
+    "test:all": "node --test --test-concurrency=1 tests/backend.test.js tests/payroll.test.js tests/lampiran.test.js tests/privasi.test.js tests/bonus.test.js tests/speed.test.js tests/e2e.test.js tests/clickthrough.test.js",
+    "test:build": "node dev/build.js && node dev/run-on-build.js",
+    "assets": "node dev/embed-assets.js",
+    "build": "node dev/build.js",
+    "dev": "node dev/server.js",
+    "push": "node dev/build.js && clasp push --force",
+    "vercel": "node dev/build.js && node dev/build-vercel.js"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1",
+    "terser": "^5.51.2"
+  }
+}

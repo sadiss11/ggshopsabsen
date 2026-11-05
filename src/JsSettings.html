@@ -1,0 +1,314 @@
+<script>
+'use strict';
+/* =========================================================================
+ * Pengaturan (khusus Admin): perusahaan & aturan absensi, lokasi kerja,
+ * pengguna, dan audit log. Tidak ada jadwal kerja: karyawan bebas memilih jam.
+ * ========================================================================= */
+
+const SETTINGS_TABS = [
+  { id: 'umum', label: 'Perusahaan & aturan' },
+  { id: 'lokasi', label: 'Lokasi kerja' },
+  { id: 'pengguna', label: 'Pengguna' },
+  { id: 'audit', label: 'Audit log' },
+];
+
+Pages.pengaturan = {
+  async render(view, param, gen) {
+    const tab = SETTINGS_TABS.some(t => t.id === param) ? param : 'umum';
+    view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Pengaturan</h1><p class="page-sub">Kelola sistem, lokasi, dan pengguna</p></div></div>' +
+      '<div class="tabs" style="margin:-6px 0 16px">' + SETTINGS_TABS.map(t => '<a class="tab ' + (t.id === tab ? 'is-active' : '') + '" href="#/pengaturan/' + t.id + '">' + esc(t.label) + '</a>').join('') + '</div>' +
+      '<div id="set-body">' + UI.loading() + '</div>';
+    const body = $('#set-body', view);
+    return SettingsTabs[tab](body, gen);
+  },
+};
+
+const SettingsTabs = {
+  /* ---------- Perusahaan & aturan ---------- */
+  async umum(body, gen) {
+    const s = await api.swr('settings.get');
+    if (!App.alive(gen)) return;
+    const c = s.config;
+    const sw = (name, on, label, hint) => '<div class="span-2"><label class="switch"><input type="checkbox" name="' + name + '"' + (on ? ' checked' : '') + '><span class="track"></span><span>' + esc(label) + '</span></label>' + (hint ? '<div class="hint" style="margin:4px 0 0 46px">' + esc(hint) + '</div>' : '') + '</div>';
+    body.innerHTML = '<div class="grid grid-main">' +
+      '<form class="card" novalidate><div class="card-body"><div class="form-grid">' +
+        '<div class="form-section span-2">Profil perusahaan</div>' +
+        '<label class="field span-2"><span class="label">Nama perusahaan <span class="req-mark">*</span></span><input class="input" name="companyName" maxlength="80" value="' + esc(c.companyName) + '"></label>' +
+        '<label class="field span-2"><span class="label">Alamat</span><input class="input" name="companyAddress" maxlength="200" value="' + esc(c.companyAddress) + '"></label>' +
+        '<label class="field"><span class="label">Telepon</span><input class="input" name="companyPhone" maxlength="20" value="' + esc(c.companyPhone) + '"></label>' +
+        '<label class="field"><span class="label">Email</span><input class="input" type="email" name="companyEmail" maxlength="100" value="' + esc(c.companyEmail) + '"></label>' +
+        '<div class="form-section span-2 mt-2">Waktu & aturan absensi</div>' +
+        '<label class="field"><span class="label">Zona waktu perusahaan</span><select class="select" name="timezone">' + UI.options(s.timezones, c.timezone) + '</select><span class="hint">Seluruh jam absensi memakai jam server pada zona ini.</span></label>' +
+        '<label class="field"><span class="label">Ambang akurasi GPS (meter)</span><input class="input" type="number" min="5" max="1000" step="1" name="gpsMaxAccuracy" value="' + esc(c.gpsMaxAccuracy) + '"><span class="hint">Absensi ditolak jika akurasi GPS lebih buruk dari nilai ini.</span></label>' +
+        '<label class="field"><span class="label">Radius default lokasi baru (meter)</span><input class="input" type="number" min="10" max="5000" step="1" name="defaultRadius" value="' + esc(c.defaultRadius) + '"></label>' +
+        sw('allowPhotoUpload', c.allowPhotoUpload, 'Izinkan foto dari kamera HP bila kamera langsung diblokir', 'Google tidak memberi izin kamera langsung untuk web app Apps Script, sehingga foto diambil lewat kamera HP lalu dicap jam server & lokasi GPS. Foto ini ditandai "Lampiran" untuk HR.') +
+        '<label class="field span-2"><span class="label">Pemeriksaan wajah otomatis</span><select class="select" name="faceCheck">' +
+          UI.options([{ value: 'off', label: 'Nonaktif' }, { value: 'advisory', label: 'Saran saja: tandai foto tanpa wajah untuk ditinjau' }], c.faceCheck) +
+          '</select><span class="hint">Memakai FaceDetector API browser bila tersedia. Bukan pengenalan wajah dan tidak menolak absensi.</span></label>' +
+        '<div class="form-section span-2 mt-2">Retensi data</div>' +
+        '<label class="field"><span class="label">Simpan foto absensi (hari)</span><input class="input" type="number" min="0" max="3650" name="photoRetentionDays" value="' + esc(c.photoRetentionDays) + '"><span class="hint">0 = tidak dihapus otomatis.</span></label>' +
+        '<label class="field"><span class="label">Simpan audit log (hari)</span><input class="input" type="number" min="0" max="3650" name="auditRetentionDays" value="' + esc(c.auditRetentionDays) + '"></label>' +
+        '<div class="span-2" data-err></div>' +
+      '</div></div><div class="card-foot row" style="justify-content:flex-end"><button class="btn btn-primary" type="submit">' + icon('check') + 'Simpan pengaturan</button></div></form>' +
+      '<div style="display:grid;gap:16px;align-content:start">' +
+        '<div class="card"><div class="card-head"><div class="card-title">Status sistem</div></div><div class="card-body"><dl class="kv" style="grid-template-columns:1fr auto">' +
+          '<dt>Database Google Sheets</dt><dd>' + UI.badge(s.configured.spreadsheet ? 'Terhubung' : 'Belum', s.configured.spreadsheet ? 'success' : 'danger') + '</dd>' +
+          '<dt>Folder foto Google Drive</dt><dd>' + UI.badge(s.configured.photoFolder ? 'Terhubung' : 'Belum', s.configured.photoFolder ? 'success' : 'danger') + '</dd>' +
+          '<dt>Sesi foto berlaku</dt><dd>' + Math.round(s.limits.nonceTtlSec / 60) + ' menit</dd>' +
+          '<dt>Masa sesi login</dt><dd>' + s.limits.sessionHours + ' jam</dd>' +
+          '<dt>Jeda minimal check-out</dt><dd>' + s.limits.minCheckoutGapMin + ' menit</dd>' +
+        '</dl></div></div>' +
+        '<div class="card"><div class="card-body">' + UI.callout('info', 'Validasi GPS dilakukan di server berdasarkan titik kantor yang tersimpan. Browser tidak dapat menjamin lokasi tidak dipalsukan; transaksi yang tidak wajar ditandai untuk ditinjau HR di menu Laporan.') + '</div></div>' +
+      '</div></div>';
+    const form = $('form', body);
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const btn = $('button[type=submit]', form);
+      UI.busy(btn, true, 'Menyimpan…');
+      try {
+        const cfg = await api('settings.save', UI.formValues(form));
+        App.company.companyName = cfg.companyName;
+        UI.toast('Pengaturan disimpan.', 'success');
+        Clock.sync().catch(() => {});
+        UI.busy(btn, false);
+        $('[data-err]', form).innerHTML = '';
+      } catch (ex) { UI.busy(btn, false); $('[data-err]', form).innerHTML = UI.callout('danger', esc(ex.message)); }
+    });
+  },
+
+  /* ---------- Lokasi kerja ---------- */
+  async lokasi(body, gen) {
+    const data = await api.swr('locations.list');
+    if (!App.alive(gen)) return;
+    body.innerHTML = '<div class="card"><div class="card-head"><div><div class="card-title">Lokasi kerja</div><div class="card-sub">Titik kantor dan radius yang diizinkan untuk absensi</div></div>' +
+      '<button class="btn btn-primary" data-add>' + icon('plus') + 'Tambah lokasi</button></div><div class="mt-3" data-table></div></div>';
+    if (!data.locations.length) $('[data-table]', body).insertAdjacentHTML('beforebegin', '<div style="padding:0 18px">' + UI.callout('warning', 'Belum ada lokasi kerja. Karyawan tidak dapat absen sampai minimal satu lokasi aktif ditambahkan.') + '</div>');
+    const t = DataTable({
+      rows: data.locations,
+      empty: { icon: 'pin', title: 'Belum ada lokasi', text: 'Tambahkan titik kantor dan radius absensi.' },
+      columns: [
+        { label: 'Lokasi', render: r => '<div class="strong">' + esc(r.nama) + '</div><div class="small muted">' + esc(r.alamat || '') + '</div>' },
+        { label: 'Koordinat', cls: 'nowrap', render: r => '<a class="num small" target="_blank" rel="noopener noreferrer" href="https://www.google.com/maps?q=' + encodeURIComponent(r.latitude + ',' + r.longitude) + '">' + esc(Number(r.latitude).toFixed(6)) + ', ' + esc(Number(r.longitude).toFixed(6)) + '</a>' },
+        { label: 'Radius', cls: 'num', render: r => esc(r.radius) + ' m' },
+        { label: 'Dipakai', cls: 'small', render: r => r.dipakai ? r.dipakai + ' karyawan' : '<span class="muted">Semua (default)</span>' },
+        { label: 'Status', render: r => UI.badge(r.status) },
+        { label: '', cls: 'col-actions', render: r => '<div class="row" style="justify-content:flex-end;gap:4px"><button class="icon-btn tone-primary" data-edit="' + esc(r.locationId) + '" aria-label="Edit">' + icon('edit', 'ic-sm') + '</button>' +
+          '<button class="icon-btn tone-danger" data-del="' + esc(r.locationId) + '" aria-label="Hapus">' + icon('trash', 'ic-sm') + '</button></div>' },
+      ],
+    });
+    $('[data-table]', body).appendChild(t.el);
+    const byId = id => data.locations.find(l => l.locationId === id);
+    on(body, 'click', '[data-add]', () => locationForm(null, data.defaultRadius));
+    on(body, 'click', '[data-edit]', (e, b) => locationForm(byId(b.dataset.edit), data.defaultRadius));
+    on(body, 'click', '[data-del]', async (e, b) => {
+      const l = byId(b.dataset.del);
+      if (!await UI.confirm({ title: 'Hapus lokasi', message: 'Hapus lokasi "' + l.nama + '"?', confirmText: 'Hapus', tone: 'danger' })) return;
+      try { await api('locations.remove', { locationId: l.locationId }); UI.toast('Lokasi dihapus.', 'success'); META_CACHE = null; App.route(); } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+  },
+
+  /* ---------- Pengguna ---------- */
+  async pengguna(body, gen) {
+    const res = await Promise.all([api.swr('users.list'), metaOptions()]);
+    if (!App.alive(gen)) return;
+    const data = res[0], meta = res[1];
+    body.innerHTML = '<div class="card"><div class="card-head"><div><div class="card-title">Pengguna</div><div class="card-sub">Akun login dan hak akses</div></div>' +
+      '<button class="btn btn-primary" data-add>' + icon('plus') + 'Tambah pengguna</button></div><div class="mt-3" data-table></div></div>';
+    const t = DataTable({
+      rows: data.users, searchKeys: ['username', 'nama', 'email', 'roleLabel', 'employeeNama'], searchPlaceholder: 'Cari pengguna…',
+      columns: [
+        { label: 'No', cls: 'col-num', render: (r, i) => String(i + 1) },
+        { label: 'Pengguna', render: r => UI.person(r.employeeNama || r.nama || r.username, '@' + r.username) },
+        { label: 'Email', render: r => esc(r.email || '–') },
+        { label: 'Role', render: r => UI.badge(r.roleLabel, r.role === 'admin' ? 'primary' : 'neutral') },
+        { label: 'Karyawan', render: r => r.employeeId ? '<span class="num">' + esc(r.employeeId) + '</span>' : '<span class="faint">–</span>' },
+        { label: 'Status', render: r => UI.badge(r.status) + (r.mustChangePassword ? '<div class="small muted mt-1">Password sementara</div>' : '') },
+        { label: 'Login terakhir', cls: 'small nowrap', render: r => esc(Fmt.iso(r.lastLoginAt)) },
+        { label: '', cls: 'col-actions', render: r => '<div class="row" style="justify-content:flex-end;gap:4px">' +
+          '<button class="icon-btn tone-primary" data-edit="' + esc(r.userId) + '" title="Edit" aria-label="Edit">' + icon('edit', 'ic-sm') + '</button>' +
+          '<button class="icon-btn" data-reset="' + esc(r.userId) + '" title="Reset password" aria-label="Reset password">' + icon('key', 'ic-sm') + '</button>' +
+          (r.userId !== App.user.userId ? '<button class="icon-btn tone-danger" data-del="' + esc(r.userId) + '" title="Hapus" aria-label="Hapus">' + icon('trash', 'ic-sm') + '</button>' : '') + '</div>' },
+      ],
+    });
+    $('[data-table]', body).appendChild(t.el);
+    const byId = id => data.users.find(u => u.userId === id);
+    on(body, 'click', '[data-add]', () => userForm(null, meta, data.roles));
+    on(body, 'click', '[data-edit]', (e, b) => userForm(byId(b.dataset.edit), meta, data.roles));
+    on(body, 'click', '[data-reset]', async (e, b) => {
+      const u = byId(b.dataset.reset);
+      if (!await UI.confirm({ title: 'Reset password', message: 'Buat password sementara baru untuk @' + u.username + '? Sesi login yang sedang aktif akan berakhir.', confirmText: 'Reset password' })) return;
+      try {
+        const r = await api('users.resetPassword', { userId: u.userId });
+        UI.secret('Password direset', 'Password sementara untuk @' + r.username + ':', r.tempPassword);
+        if (u.userId === App.user.userId) App.sessionExpired('Password Anda direset. Silakan masuk dengan password sementara.');
+        else App.route();
+      } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+    on(body, 'click', '[data-del]', async (e, b) => {
+      const u = byId(b.dataset.del);
+      if (!await UI.confirm({ title: 'Hapus pengguna', message: 'Hapus akun @' + u.username + '? Data karyawan tidak ikut terhapus.', confirmText: 'Hapus', tone: 'danger' })) return;
+      try { await api('users.remove', { userId: u.userId }); UI.toast('Pengguna dihapus.', 'success'); App.route(); } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+  },
+
+  /* ---------- Audit log ---------- */
+  async audit(body, gen) {
+    let filter = { action: '', result: '', q: '' };
+    const actions = ['LOGIN', 'LOGOUT', 'CHECKIN', 'CHECKOUT', 'PHOTO_VIEW', 'ATTENDANCE_EDIT', 'ACCESS_DENIED', 'SETTINGS_UPDATE', 'LOCATION_CREATE', 'LOCATION_UPDATE',
+      'SCHEDULE_CREATE', 'SCHEDULE_UPDATE', 'EMPLOYEE_CREATE', 'EMPLOYEE_UPDATE', 'EMPLOYEE_REMOVE', 'USER_CREATE', 'USER_UPDATE', 'USER_RESET_PASSWORD', 'USER_REMOVE',
+      'LEAVE_SUBMIT', 'LEAVE_DECIDE', 'CHANGE_PASSWORD', 'RETENTION', 'SERVER_ERROR'];
+    body.innerHTML = '<div class="card"><div class="table-tools" style="border-bottom:1px solid var(--border)">' +
+      '<label class="field" style="flex:0 1 220px"><span class="label">Aksi</span><select class="select" data-f="action">' + UI.options(actions, '', 'Semua aksi') + '</select></label>' +
+      '<label class="field" style="flex:0 1 160px"><span class="label">Hasil</span><select class="select" data-f="result">' + UI.options(['SUCCESS', 'FAIL', 'DENIED'], '', 'Semua') + '</select></label>' +
+      '<label class="field" style="flex:1 1 220px"><span class="label">Kata kunci</span><input class="input" data-f="q" placeholder="Username, ID, detail…"></label>' +
+      '<button class="btn btn-primary" style="align-self:flex-end" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button></div><div data-table></div></div>';
+    const load = async () => {
+      $$('[data-f]', body).forEach(el => { filter[el.dataset.f] = el.value.trim(); });
+      const tbox = $('[data-table]', body);
+      tbox.innerHTML = '<div style="padding:18px">' + UI.loading() + '</div>';
+      let res;
+      try { res = await api('audit.list', filter); } catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
+      if (!App.alive(gen)) return;
+      const t = DataTable({
+        rows: res.logs, pageSize: 20,
+        empty: { icon: 'history', title: 'Tidak ada catatan', text: '' },
+        columns: [
+          { label: 'Waktu', cls: 'nowrap num small', render: r => esc(r.waktuLokal) },
+          { label: 'Pengguna', render: r => r.username ? '<span class="strong">@' + esc(r.username) + '</span><div class="small muted">' + esc(r.role) + '</div>' : '<span class="faint">sistem</span>' },
+          { label: 'Aksi', render: r => '<span class="num small strong">' + esc(r.action) + '</span>' },
+          { label: 'Objek', cls: 'small', render: r => esc(r.entity) + (r.entityId ? '<div class="muted num">' + esc(r.entityId) + '</div>' : '') },
+          { label: 'Hasil', render: r => UI.badge(r.result) },
+          { label: 'Detail', render: r => '<code class="small" style="white-space:pre-wrap;word-break:break-all;color:var(--text-2)">' + esc(r.detail) + '</code>' },
+        ],
+      });
+      tbox.innerHTML = '';
+      tbox.appendChild(t.el);
+    };
+    $('[data-load]', body).addEventListener('click', load);
+    await load();
+  },
+};
+
+/* ---------- Formulir lokasi (dengan peta Leaflet opsional) ---------- */
+let LEAFLET_PROMISE = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (LEAFLET_PROMISE) return LEAFLET_PROMISE;
+  LEAFLET_PROMISE = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    s.onload = () => resolve(window.L);
+    s.onerror = () => { LEAFLET_PROMISE = null; reject(new Error('Peta tidak dapat dimuat.')); };
+    document.head.appendChild(s);
+  });
+  return LEAFLET_PROMISE;
+}
+
+function locationForm(loc, defaultRadius) {
+  const l = loc || { radius: defaultRadius || 100, status: 'Aktif' };
+  const m = UI.modal({
+    title: loc ? 'Edit lokasi kerja' : 'Tambah lokasi kerja', size: 'lg',
+    body: '<form class="form-grid" novalidate>' +
+      '<label class="field span-2"><span class="label">Nama lokasi <span class="req-mark">*</span></span><input class="input" name="nama" maxlength="80" value="' + esc(l.nama) + '" placeholder="mis. Kantor Pusat"></label>' +
+      '<label class="field span-2"><span class="label">Alamat</span><input class="input" name="alamat" maxlength="200" value="' + esc(l.alamat) + '"></label>' +
+      '<label class="field"><span class="label">Latitude <span class="req-mark">*</span></span><input class="input num" name="latitude" inputmode="decimal" value="' + esc(l.latitude) + '" placeholder="-6.175392"></label>' +
+      '<label class="field"><span class="label">Longitude <span class="req-mark">*</span></span><input class="input num" name="longitude" inputmode="decimal" value="' + esc(l.longitude) + '" placeholder="106.827153"></label>' +
+      '<div class="span-2 row wrap" style="gap:8px"><button type="button" class="btn btn-sm btn-outline" data-here>' + icon('locate', 'ic-sm') + 'Gunakan lokasi saya saat ini</button>' +
+        '<button type="button" class="btn btn-sm btn-outline" data-paste>' + icon('copy', 'ic-sm') + 'Tempel koordinat dari Google Maps</button><span class="small muted" data-here-msg></span></div>' +
+      '<label class="field"><span class="label">Radius absensi (meter) <span class="req-mark">*</span></span><input class="input" type="number" min="10" max="5000" name="radius" value="' + esc(l.radius) + '"><span class="hint">Karyawan harus berada dalam radius ini dari titik kantor.</span></label>' +
+      '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Aktif', 'Nonaktif'], l.status) + '</select></label>' +
+      '<div class="span-2"><div class="map-box" data-map><div class="empty small">Memuat peta…</div></div><div class="hint mt-1">Klik peta untuk memindahkan titik kantor. Lingkaran biru menunjukkan radius absensi.</div></div>' +
+      '<div class="span-2" data-err></div></form>',
+    foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('check') + 'Simpan lokasi</button>',
+  });
+  const form = $('form', m.el);
+  const latI = $('[name=latitude]', form), lngI = $('[name=longitude]', form), radI = $('[name=radius]', form);
+  let map = null, marker = null, circle = null;
+  const val = () => ({ lat: parseFloat(String(latI.value).replace(',', '.')), lng: parseFloat(String(lngI.value).replace(',', '.')), r: Number(radI.value) || 0 });
+  const syncMap = (fit) => {
+    if (!map) return;
+    const v = val();
+    if (!isFinite(v.lat) || !isFinite(v.lng)) return;
+    const ll = [v.lat, v.lng];
+    if (!marker) { marker = window.L.marker(ll).addTo(map); circle = window.L.circle(ll, { radius: v.r, color: '#2563eb', weight: 2, fillOpacity: 0.1 }).addTo(map); }
+    marker.setLatLng(ll); circle.setLatLng(ll); circle.setRadius(v.r);
+    if (fit) map.fitBounds(circle.getBounds(), { maxZoom: 18, padding: [20, 20] });
+  };
+  loadLeaflet().then(L => {
+    if (m.isClosed()) return;
+    const box = $('[data-map]', m.el);
+    box.innerHTML = '';
+    const v = val();
+    map = L.map(box, { scrollWheelZoom: false }).setView(isFinite(v.lat) ? [v.lat, v.lng] : [-2.5, 118], isFinite(v.lat) ? 17 : 4);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; OpenStreetMap' }).addTo(map);
+    map.on('click', e => { latI.value = e.latlng.lat.toFixed(7); lngI.value = e.latlng.lng.toFixed(7); syncMap(false); });
+    syncMap(true);
+    setTimeout(() => map.invalidateSize(), 200);
+  }).catch(() => { const box = $('[data-map]', m.el); if (box) box.innerHTML = '<div class="empty small">Peta tidak tersedia. Isi latitude & longitude secara manual.</div>'; });
+  [latI, lngI, radI].forEach(i => i.addEventListener('input', debounce(() => syncMap(false), 300)));
+  $('[data-here]', form).addEventListener('click', () => {
+    const msg = $('[data-here-msg]', form);
+    if (!navigator.geolocation) { msg.textContent = 'Perangkat tidak mendukung lokasi.'; return; }
+    msg.textContent = 'Mencari lokasi…';
+    navigator.geolocation.getCurrentPosition(p => {
+      latI.value = p.coords.latitude.toFixed(7); lngI.value = p.coords.longitude.toFixed(7);
+      msg.textContent = 'Akurasi ±' + Math.round(p.coords.accuracy) + ' m' + (p.coords.accuracy > 30 ? '. Kurang presisi, sebaiknya ulangi di luar ruangan.' : '');
+      syncMap(true);
+    }, err => { msg.textContent = GEO_MESSAGES[err.code] || 'Lokasi tidak dapat dibaca.'; }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+  });
+  $('[data-paste]', form).addEventListener('click', () => {
+    const text = window.prompt('Tempel koordinat dari Google Maps (contoh: -6.175392, 106.827153)');
+    if (!text) return;
+    const mm = /(-?\d+(?:[.,]\d+)?)\s*[,;\s]\s*(-?\d+(?:[.,]\d+)?)/.exec(text);
+    if (!mm) { UI.toast('Format koordinat tidak dikenali.', 'warning'); return; }
+    latI.value = mm[1].replace(',', '.'); lngI.value = mm[2].replace(',', '.');
+    syncMap(true);
+  });
+  $('[data-save]', m.el).addEventListener('click', async () => {
+    const v = UI.formValues(form);
+    v.latitude = String(v.latitude).replace(',', '.');
+    v.longitude = String(v.longitude).replace(',', '.');
+    if (loc) v.locationId = loc.locationId;
+    const btn = $('[data-save]', m.el);
+    UI.busy(btn, true, 'Menyimpan…');
+    try { await api('locations.save', v); m.close(); UI.toast('Lokasi disimpan.', 'success'); META_CACHE = null; App.route(); }
+    catch (ex) { UI.busy(btn, false); $('[data-err]', form).innerHTML = UI.callout('danger', esc(ex.message)); }
+  });
+}
+
+/* ---------- Formulir pengguna ---------- */
+function userForm(u, meta, roles) {
+  const x = u || { role: 'karyawan', status: 'Aktif' };
+  const m = UI.modal({
+    title: u ? 'Edit pengguna' : 'Tambah pengguna',
+    body: '<form class="form-grid" novalidate>' +
+      '<label class="field"><span class="label">Username <span class="req-mark">*</span></span><input class="input" name="username" maxlength="30" autocapitalize="none" spellcheck="false" value="' + esc(x.username) + '"' + (u ? ' disabled' : '') + '></label>' +
+      '<label class="field"><span class="label">Nama tampilan</span><input class="input" name="nama" maxlength="80" value="' + esc(x.nama) + '"></label>' +
+      '<label class="field"><span class="label">Email</span><input class="input" type="email" name="email" maxlength="100" value="' + esc(x.email) + '"></label>' +
+      '<label class="field"><span class="label">Role</span><select class="select" name="role">' + UI.options(roles, x.role) + '</select></label>' +
+      '<label class="field span-2"><span class="label">Terhubung dengan karyawan</span><select class="select" name="employeeId">' +
+        UI.options(meta.employees.map(e => ({ value: e.employeeId, label: e.employeeId + ' · ' + e.nama })), x.employeeId, 'Tidak terhubung') + '</select>' +
+        '<span class="hint">Wajib untuk akun yang melakukan absensi. Role Karyawan hanya dapat melihat absen, laporan, dan gaji miliknya sendiri; Super Admin dan HRD melihat semua karyawan.</span></label>' +
+      '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Aktif', 'Nonaktif'], x.status) + '</select></label>' +
+      '<div class="span-2" data-err></div></form>',
+    foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('check') + 'Simpan</button>',
+  });
+  $('[data-save]', m.el).addEventListener('click', async () => {
+    const v = UI.formValues($('form', m.el));
+    if (u) { v.userId = u.userId; delete v.username; }
+    const btn = $('[data-save]', m.el);
+    UI.busy(btn, true, 'Menyimpan…');
+    try {
+      const r = await api('users.save', v);
+      m.close();
+      UI.toast('Pengguna disimpan.', 'success');
+      if (r.tempPassword) UI.secret('Akun dibuat', 'Password sementara untuk @' + r.username + ':', r.tempPassword);
+      App.route();
+    } catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+  });
+}
+</script>

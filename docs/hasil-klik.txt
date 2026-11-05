@@ -1,0 +1,68 @@
+Klik satu per satu (antislop R-35), Chrome headless, 2026-11-05T12:27:38.990Z
+
+PASS  Login: tombol mata password -> password terlihat (type=text)
+PASS  Login: kirim form kosong -> validasi: "Username dan password wajib diisi."
+PASS  Keyboard: Tab ke elemen pertama -> fokus terlihat: A outline solid 2px
+PASS  Sidebar: dashboard -> #/dashboard · Dashboard
+PASS  Sidebar: karyawan -> #/karyawan · Data karyawan
+PASS  Sidebar: absensi -> #/absensi · Absensi
+PASS  Sidebar: jobdesk -> #/jobdesk · Jobdesk
+PASS  Sidebar: izin -> #/izin · Izin & cuti
+PASS  Sidebar: gaji -> #/gaji · Gaji
+PASS  Sidebar: laporan -> #/laporan · Laporan
+PASS  Sidebar: profil -> #/profil · Profil saya
+PASS  Sidebar: pengaturan -> #/pengaturan · Pengaturan
+PASS  Topbar: lonceng notifikasi -> dropdown notifikasi terbuka: Notifikasi / 1 pengajuan izin/cuti menunggu persetujuan
+PASS  Topbar: klik di luar dropdown -> dropdown tertutup
+PASS  Topbar: menu akun → Ubah password -> dialog "Ubah password" terbuka
+PASS  Dialog: tombol Escape -> dialog tertutup
+PASS  Karyawan: pencarian "siti" -> 1 baris tersisa
+PASS  Karyawan: filter departemen IT -> 2 karyawan IT
+PASS  Karyawan: Tambah karyawan (setelah halaman dibuka 2x) -> tepat 1 dialog terbuka
+PASS  Form: simpan tanpa nama -> validasi: "Nama lengkap wajib diisi."
+PASS  Form: tombol Batal -> dialog tertutup
+PASS  Karyawan: ikon edit -> form edit terisi "Budi Santoso"
+PASS  Karyawan: ikon hapus → Batal -> konfirmasi muncul lalu dibatalkan, data tetap 4 karyawan
+PASS  Karyawan: tautan nama → profil -> #/profil/K001 · Profil karyawan
+PASS  Profil: tab Jobdesk & Riwayat -> panel riwayat tampil
+PASS  Jobdesk: filter Pending -> 1 tugas Pending
+PASS  Jobdesk: ubah status -> tersimpan di sheet: In Progress
+PASS  Jobdesk: Tambah jobdesk -> form terbuka & ditutup
+PASS  Izin: Proses pengajuan → Setujui -> status di sheet: Disetujui
+PASS  Izin: filter Disetujui -> 1 baris
+PASS  Gaji: tab verifikasi -> #/gaji/verifikasi · Dari / Sampai
+PASS  Gaji: tab bonus -> #/gaji/bonus · Verifikasi bonus penjualan / Cocokkan jumlah paket dengan screenshot sebelum menyetujui
+PASS  Gaji: tab rekap -> #/gaji/rekap · Dari / Sampai
+PASS  Gaji: tab tarif -> #/gaji/tarif · Jobdesk & tarif / Tarif dibayar sekali per hari untuk setiap jobdesk yang dilaporkan saat pulang dan disetujui
+PASS  Gaji tarif: Tambah jobdesk → simpan kosong -> validasi: "Nama jobdesk wajib diisi.", dialog ditutup dengan Escape
+PASS  Gaji rekap: unduh CSV -> CSV rekap gaji dibuat
+PASS  Gaji bonus: Tambah jenis paket → simpan kosong -> validasi: "Nama jenis paket wajib diisi."
+PASS  Gaji bonus: isi jenis paket + pilih peserta → simpan -> tersimpan: Rp 500/paket, target 40, peserta K001
+PASS  Laporan: Tampilkan rekap -> 4 baris rekap
+PASS  Laporan: unduh CSV rekap -> file CSV dibuat
+PASS  Riwayat: Detail → foto dimuat -> dialog detail menampilkan foto check-in
+PASS  Pengaturan: tab umum -> #/pengaturan/umum · Profil perusahaan
+PASS  Pengaturan: tab lokasi -> #/pengaturan/lokasi · Lokasi kerja
+PASS  Pengaturan lokasi: tombol tambah -> dialog terbuka & ditutup dengan Escape
+PASS  Pengaturan: tab pengguna -> #/pengaturan/pengguna · Pengguna
+PASS  Pengaturan pengguna: tombol tambah -> dialog terbuka & ditutup dengan Escape
+PASS  Pengaturan: tab audit -> #/pengaturan/audit · undefined
+PASS  Sidebar: Keluar → Batal -> konfirmasi keluar dibatalkan, tetap masuk
+PASS  Konsol desktop -> 0 error JavaScript
+PASS  Ponsel login: lebar halaman -> 390px, tanpa overflow
+PASS  Navigasi bawah: dashboard -> #/dashboard · lebar 390px
+PASS  Navigasi bawah: jobdesk -> #/jobdesk · lebar 390px
+PASS  Navigasi bawah: izin -> #/izin · lebar 390px
+PASS  Navigasi bawah: absensi -> #/absensi · lebar 390px
+PASS  Navigasi bawah: Menu -> laci menu terbuka
+PASS  Laci menu: Profil Saya -> #/profil · laci tertutup · lebar 390px
+PASS  Ukuran target sentuh tombol bawah -> tinggi 52/52/52/52/52 px (≥ 44)
+PASS  Absensi: tombol Matikan kamera -> kamera mati, tampil "Kamera belum aktif"
+PASS  Absensi: tombol Aktifkan kamera -> kamera menyala kembali
+PASS  Absensi: tombol shutter -> pratinjau foto tampil, kamera berhenti
+PASS  Absensi: Ulangi foto -> kamera menyala untuk foto ulang
+PASS  Absensi: Check-in → Batal -> konfirmasi dibatalkan, belum ada data baru (1 baris)
+PASS  Absensi: Check-in → Konfirmasi -> bukti tampil, sheet berisi 2 baris
+PASS  Bukti: tombol Selesai -> dialog bukti tertutup · lebar 390px
+PASS  Izin: Ajukan izin → Kirim -> pengajuan tersimpan (total 2)
+PASS  Konsol ponsel -> 0 error JavaScript

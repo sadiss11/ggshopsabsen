@@ -1,0 +1,695 @@
+<script>
+'use strict';
+/* =========================================================================
+ * Halaman Gaji: verifikasi laporan jobdesk, bonus penjualan paket (host),
+ * rekap gaji per rentang tanggal, daftar jobdesk & tarif, dan "Gaji saya".
+ * Gaji = tarif laporan jobdesk yang Disetujui + bonus yang Disetujui (tanpa gaji pokok).
+ * Bonus per hari = (paket terjual − target) × bonus per paket, per jenis paket.
+ * ========================================================================= */
+
+function dateAdd(s, n) {
+  const p = String(s).split('-').map(Number);
+  return new Date(Date.UTC(p[0], p[1] - 1, p[2] + n)).toISOString().slice(0, 10);
+}
+
+async function todayStr() {
+  if (!Clock.today()) await Clock.sync().catch(() => null);
+  return Clock.today();
+}
+
+function rangeFields(from, to) {
+  return '<label class="field" style="flex:0 1 160px"><span class="label">Dari</span><input class="input" type="date" data-from value="' + esc(from) + '"></label>' +
+    '<label class="field" style="flex:0 1 160px"><span class="label">Sampai</span><input class="input" type="date" data-to value="' + esc(to) + '"></label>';
+}
+
+const FLAG_SHORT = { FOTO_LAMA: 'foto lama', LAMPIRAN: 'kamera HP', TANPA_ABSEN: 'tidak ada absen di tanggal ini' };
+
+function flagLine(flags) {
+  return flags && flags.length ? '<div class="small mt-1" style="color:var(--warning)">' + icon('flag', 'ic-sm') + ' ' + esc(flags.map(f => FLAG_SHORT[f] || f).join(', ')) + '</div>' : '';
+}
+
+function statusCell(r) {
+  return UI.badge(r.status) + (r.diverifikasiOleh ? '<div class="small muted mt-1">oleh ' + esc(r.diverifikasiOleh) + '</div>' : '') +
+    (r.catatanVerifikasi ? '<div class="small muted">' + esc(r.catatanVerifikasi) + '</div>' : '');
+}
+
+/** "(100 − 40) × Rp 500" atau keterangan belum mencapai target. */
+function bonusFormula(jumlah, target, tarif) {
+  return jumlah > target ? '(' + jumlah + ' − ' + target + ') × ' + Fmt.rupiah(tarif) : jumlah + ' dari target ' + target + ' paket';
+}
+
+/** Bukti laporan dari Google Drive (lewat server, dengan cek hak akses). */
+function showProof(o) {
+  const m = UI.modal({
+    title: o.title,
+    body: '<div class="receipt-row"><div class="' + (o.tall ? 'shot-slot' : 'photo-slot') + '" data-ph style="' + (o.tall ? '' : 'width:220px;flex:none') + '"><span class="spinner"></span></div>' +
+      '<dl class="kv grow" style="grid-template-columns:110px minmax(0,1fr)">' + o.rows.map(x => '<dt>' + esc(x[0]) + '</dt><dd>' + x[1] + '</dd>').join('') + '</dl></div>',
+    foot: '<button class="btn btn-outline" data-close>Tutup</button>',
+  });
+  if (!o.hasPhoto) { $('[data-ph]', m.el).textContent = 'Foto tidak tersedia.'; return; }
+  api(o.action, o.payload).then(res => {
+    const slot = $('[data-ph]', m.el);
+    if (slot) slot.innerHTML = '<img alt="' + esc(o.title) + '" src="' + res.dataUrl + '">';
+  }, ex => { const slot = $('[data-ph]', m.el); if (slot) slot.textContent = ex.message; });
+}
+
+function showWorkPhoto(r) {
+  showProof({
+    title: 'Foto hasil kerja', action: 'work.photo', payload: { reportId: r.reportId }, hasPhoto: r.hasPhoto,
+    rows: [['Karyawan', esc(r.nama)], ['Tanggal', esc(Fmt.dateLong(r.workDate))], ['Jobdesk', esc(r.namaJobdesk)],
+      ['Tarif', '<span class="money">' + esc(Fmt.rupiah(r.tarif)) + '</span>'], ['Keterangan', esc(r.keterangan)], ['Status', statusCell(r)]],
+  });
+}
+
+function showBonusPhoto(r) {
+  showProof({
+    title: 'Screenshot penjualan', action: 'bonus.photo', payload: { bonusId: r.bonusId }, hasPhoto: r.hasPhoto, tall: true,
+    rows: [['Karyawan', esc(r.nama)], ['Tanggal', esc(Fmt.dateLong(r.workDate))], ['Jenis paket', esc(r.namaSkema)],
+      ['Terjual', r.jumlah + ' paket <span class="small muted">(target ' + r.target + ')</span>'],
+      ['Bonus', '<span class="money">' + esc(Fmt.rupiah(r.nominal)) + '</span><div class="small muted">' + esc(bonusFormula(r.jumlah, r.target, r.tarif)) + '</div>'],
+      ['Keterangan', r.keterangan ? esc(r.keterangan) : '<span class="faint">–</span>'], ['Status', statusCell(r) + flagLine(r.flags)]],
+  });
+}
+
+function totalsLine(t) {
+  return '<div class="summary-line">' +
+    '<div><div class="k">Disetujui</div><div class="v money">' + esc(Fmt.rupiah(t.Disetujui.total)) + '</div><div class="small muted">' + t.Disetujui.count + ' laporan</div></div>' +
+    '<div><div class="k">Menunggu verifikasi</div><div class="v money">' + esc(Fmt.rupiah(t.Menunggu.total)) + '</div><div class="small muted">' + t.Menunggu.count + ' laporan</div></div>' +
+    '<div><div class="k">Ditolak</div><div class="v">' + t.Ditolak.count + '</div><div class="small muted">tidak dibayar</div></div>' +
+  '</div>';
+}
+
+function addTotals(a, b) {
+  const out = {};
+  ['Disetujui', 'Menunggu', 'Ditolak'].forEach(k => { out[k] = { count: a[k].count + b[k].count, total: a[k].total + b[k].total }; });
+  return out;
+}
+
+/** Screenshot → JPEG (sisi terpanjang maks. 1800 px) + SHA-256 file asli untuk cek pemakaian ulang. */
+async function screenshotJpeg(file) {
+  if (file.type && !/^image\//.test(file.type)) throw new Error('File harus berupa gambar (screenshot).');
+  const origHash = await sha256Hex(await file.arrayBuffer());
+  const loaded = await loadImageFile(file);
+  const img = loaded.img;
+  const w0 = img.naturalWidth, h0 = img.naturalHeight;
+  const scale = Math.min(1, 1800 / Math.max(w0, h0));
+  const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
+  if (Math.min(w, h) < 240) { URL.revokeObjectURL(loaded.url); throw new Error('Screenshot terlalu kecil atau terlalu panjang. Potong pada bagian jumlah paket, lalu pilih lagi.'); }
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const x = c.getContext('2d');
+  x.fillStyle = '#ffffff';
+  x.fillRect(0, 0, w, h);
+  x.drawImage(img, 0, 0, w, h);
+  URL.revokeObjectURL(loaded.url);
+  let dataUrl = c.toDataURL('image/jpeg', 0.85);
+  if (dataUrl.length > 1900000) dataUrl = c.toDataURL('image/jpeg', 0.65);
+  return { dataUrl: dataUrl, origHash: origHash };
+}
+
+/**
+ * Tabel verifikasi laporan berbayar (jobdesk atau bonus): filter, setujui/tolak satu
+ * atau banyak sekaligus, dan lihat bukti. Penolakan wajib alasan.
+ */
+async function reportVerifier(body, gen, cfg) {
+  const today = await todayStr();
+  const meta = await metaOptions();
+  if (!App.alive(gen)) return;
+  body.innerHTML = '<div class="card">' + (cfg.title ? '<div class="card-head"><div><div class="card-title">' + esc(cfg.title) + '</div><div class="card-sub">' + esc(cfg.sub) + '</div></div></div>' : '') +
+    '<div class="table-tools" style="border-bottom:1px solid var(--border)">' + rangeFields(dateAdd(today, -6), today) +
+    '<label class="field" style="flex:0 1 170px"><span class="label">Status</span><select class="select" data-status>' + UI.options(['Menunggu', 'Disetujui', 'Ditolak'], 'Menunggu', 'Semua') + '</select></label>' +
+    '<label class="field" style="flex:0 1 200px"><span class="label">Departemen</span><select class="select" data-dept>' + UI.options(meta.departments, '', 'Semua') + '</select></label>' +
+    '<button class="btn btn-primary" style="align-self:flex-end" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button></div>' +
+    '<div data-sum style="padding:16px 20px"></div><div data-bulk></div><div data-table></div></div>';
+  const picked = new Set();
+  let current = null;
+  let first = true;
+  const idOf = r => r[cfg.idKey];
+  const bulk = () => {
+    const box = $('[data-bulk]', body);
+    const can = current ? current.reports.filter(r => r.canVerify) : [];
+    box.innerHTML = can.length ? '<div class="bulk-bar"><span class="small strong">' + picked.size + ' dipilih</span>' +
+      '<button class="btn btn-sm btn-outline" data-pick-all>Pilih semua yang dapat diverifikasi (' + can.length + ')</button>' +
+      '<button class="btn btn-sm btn-success" data-bulk-ok' + (picked.size ? '' : ' disabled') + '>' + icon('check', 'ic-sm') + 'Setujui terpilih</button>' +
+      '<button class="btn btn-sm btn-danger" data-bulk-no' + (picked.size ? '' : ' disabled') + '>Tolak terpilih</button></div>' : '';
+  };
+  const decide = async (ids, decision) => {
+    let catatan = '';
+    if (decision === 'Ditolak') {
+      catatan = await new Promise(resolve => {
+        let done = false;
+        const m = UI.modal({
+          title: 'Tolak ' + ids.length + ' laporan', size: 'sm',
+          body: '<label class="field"><span class="label">Alasan penolakan <span class="req-mark">*</span></span><textarea class="textarea" name="why" maxlength="300" placeholder="' + esc(cfg.rejectExample) + '"></textarea><span class="hint">Alasan ini terlihat oleh karyawan.</span></label><div data-err class="mt-2"></div>',
+          foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-danger" data-ok>Tolak laporan</button>',
+          onClose: () => { if (!done) resolve(null); },
+        });
+        $('[data-ok]', m.el).addEventListener('click', () => {
+          const v = $('[name=why]', m.el).value.trim();
+          if (!v) { $('[data-err]', m.el).innerHTML = UI.callout('danger', 'Alasan penolakan wajib diisi.'); return; }
+          done = true; m.close(); resolve(v);
+        });
+      });
+      if (catatan === null) return;
+    }
+    try {
+      const payload = { decision: decision, catatan: catatan };
+      payload[cfg.idsParam] = ids;
+      const r = await api(cfg.verifyAction, payload);
+      UI.toast(r.changed + ' laporan ' + decision.toLowerCase() + '.', 'success');
+      picked.clear();
+      App.refreshNotif();
+      load();
+    } catch (ex) { UI.toast(ex.message, 'danger'); }
+  };
+  const load = async () => {
+    const tbox = $('[data-table]', body);
+    tbox.innerHTML = '<div style="padding:18px">' + UI.loading(cfg.loadingText) + '</div>';
+    const call = first ? api.swr : api;
+    first = false;
+    try {
+      current = await call(cfg.listAction, { from: $('[data-from]', body).value, to: $('[data-to]', body).value, status: $('[data-status]', body).value, departemen: $('[data-dept]', body).value });
+    } catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
+    if (!App.alive(gen)) return;
+    picked.clear();
+    $('[data-sum]', body).innerHTML = totalsLine(current.totals) + (current.truncated ? '<p class="small muted mt-2">Menampilkan 1.000 laporan pertama. Persempit rentang tanggal untuk melihat semuanya.</p>' : '');
+    const t = DataTable({
+      rows: current.reports, pageSize: 20, searchKeys: cfg.searchKeys, searchPlaceholder: cfg.searchPlaceholder, empty: cfg.empty,
+      columns: [
+        { label: '', cls: 'col-num', render: r => r.canVerify ? '<input type="checkbox" class="pick" data-pick="' + esc(idOf(r)) + '"' + (picked.has(idOf(r)) ? ' checked' : '') + ' aria-label="Pilih laporan ' + esc(r.nama) + '">' : '' },
+        { label: 'Tanggal', cls: 'nowrap', render: r => esc(Fmt.date(r.workDate)) },
+        { label: 'Karyawan', render: r => UI.person(r.nama, r.departemen) },
+      ].concat(cfg.columns, [
+        { label: 'Status', render: statusCell },
+        { label: '', cls: 'col-actions', render: r => '<div class="row" style="justify-content:flex-end;gap:6px">' +
+          '<button class="btn btn-sm btn-outline" data-photo="' + esc(idOf(r)) + '">' + icon('image', 'ic-sm') + esc(cfg.photoLabel) + '</button>' +
+          (r.canVerify && r.status !== 'Disetujui' ? '<button class="btn btn-sm btn-success" data-ok="' + esc(idOf(r)) + '">Setujui</button>' : '') +
+          (r.canVerify && r.status !== 'Ditolak' ? '<button class="btn btn-sm btn-ghost" data-no="' + esc(idOf(r)) + '">Tolak</button>' : '') + '</div>' },
+      ]),
+    });
+    tbox.innerHTML = '';
+    tbox.appendChild(t.el);
+    bulk();
+  };
+  const byId = id => current.reports.find(r => idOf(r) === id);
+  on(body, 'change', '[data-pick]', (e, cb) => { if (cb.checked) picked.add(cb.dataset.pick); else picked.delete(cb.dataset.pick); bulk(); });
+  on(body, 'click', '[data-pick-all]', () => { current.reports.filter(r => r.canVerify).forEach(r => picked.add(idOf(r))); $$('[data-pick]', body).forEach(cb => { cb.checked = true; }); bulk(); });
+  on(body, 'click', '[data-bulk-ok]', () => decide(Array.from(picked), 'Disetujui'));
+  on(body, 'click', '[data-bulk-no]', () => decide(Array.from(picked), 'Ditolak'));
+  on(body, 'click', '[data-ok]', (e, b) => decide([b.dataset.ok], 'Disetujui'));
+  on(body, 'click', '[data-no]', (e, b) => decide([b.dataset.no], 'Ditolak'));
+  on(body, 'click', '[data-photo]', (e, b) => cfg.showPhoto(byId(b.dataset.photo)));
+  $('[data-load]', body).addEventListener('click', load);
+  await load();
+}
+
+const WORK_VERIFIER = {
+  listAction: 'work.list', verifyAction: 'work.verify', idKey: 'reportId', idsParam: 'reportIds',
+  loadingText: 'Memuat laporan jobdesk…', photoLabel: 'Foto', showPhoto: showWorkPhoto,
+  rejectExample: 'Contoh: foto tidak menunjukkan hasil packing',
+  searchKeys: ['nama', 'namaJobdesk', 'keterangan', 'departemen'], searchPlaceholder: 'Cari karyawan atau jobdesk…',
+  empty: { icon: 'wallet', title: 'Tidak ada laporan pada filter ini', text: 'Laporan jobdesk dibuat otomatis saat karyawan check-out. Ubah rentang tanggal atau status untuk melihat laporan lain.' },
+  columns: [
+    { label: 'Jobdesk', render: r => '<div class="strong">' + esc(r.namaJobdesk) + '</div><div class="small muted" style="max-width:320px">' + esc(r.keterangan) + '</div>' + flagLine(r.flags) },
+    { label: 'Tarif', cls: 'right money', render: r => esc(Fmt.rupiah(r.tarif)) },
+  ],
+};
+
+const BONUS_VERIFIER = {
+  title: 'Verifikasi bonus penjualan', sub: 'Cocokkan jumlah paket dengan screenshot sebelum menyetujui',
+  listAction: 'bonus.list', verifyAction: 'bonus.verify', idKey: 'bonusId', idsParam: 'bonusIds',
+  loadingText: 'Memuat laporan bonus…', photoLabel: 'Screenshot', showPhoto: showBonusPhoto,
+  rejectExample: 'Contoh: jumlah paket tidak sesuai screenshot',
+  searchKeys: ['nama', 'namaSkema', 'keterangan', 'departemen'], searchPlaceholder: 'Cari karyawan atau jenis paket…',
+  empty: { icon: 'wallet', title: 'Tidak ada laporan bonus pada filter ini', text: 'Laporan bonus dikirim peserta dari menu Gaji › Bonus. Ubah rentang tanggal atau status untuk melihat laporan lain.' },
+  columns: [
+    { label: 'Jenis paket', render: r => '<div class="strong">' + esc(r.namaSkema) + '</div><div class="small muted">' + r.jumlah + ' terjual · target ' + r.target + '</div>' +
+      (r.keterangan ? '<div class="small muted" style="max-width:300px">' + esc(r.keterangan) + '</div>' : '') + flagLine(r.flags) },
+    { label: 'Bonus', cls: 'right', render: r => '<span class="money">' + esc(Fmt.rupiah(r.nominal)) + '</span><div class="small muted nowrap">' + r.paketBonus + ' × ' + esc(Fmt.rupiah(r.tarif)) + '</div>' },
+  ],
+};
+
+/** Formulir host: tulis paket terjual per jenis paket + screenshot, lalu riwayat 7 hari. */
+async function bonusHost(box, gen) {
+  const f = await api.swr('bonus.form');
+  if (!App.alive(gen)) return;
+  if (!f.schemes.length) {
+    box.innerHTML = '<div class="card"><div class="card-body">' + UI.callout('info', 'Anda belum terdaftar di jenis paket bonus mana pun. Hubungi HR bila Anda seharusnya mendapat bonus penjualan.') + '</div></div>';
+    return;
+  }
+  const byId = {};
+  f.schemes.forEach(s => { byId[s.schemeId] = s; });
+  let reports = f.reports;
+  let shot = null;
+  box.innerHTML = '<form class="card" data-bonus-form novalidate><div class="card-head"><div><div class="card-title">Lapor penjualan</div><div class="card-sub">Bonus = (paket terjual − target harian) × bonus per paket. Dibayar setelah disetujui HR.</div></div></div><div class="card-body">' +
+      '<label class="field" style="max-width:220px"><span class="label">Tanggal penjualan</span><input class="input" type="date" name="workDate" min="' + esc(f.minDate) + '" max="' + esc(f.today) + '" value="' + esc(f.today) + '"></label>' +
+      '<div class="bonus-items mt-4">' + f.schemes.map(s => '<div class="bonus-item" data-scheme="' + esc(s.schemeId) + '">' +
+        '<div><div class="strong">' + esc(s.nama) + '</div><div class="small muted">' + esc(Fmt.rupiah(s.tarif)) + ' per paket di atas target ' + s.target + ' paket/hari</div>' +
+        (s.deskripsi ? '<div class="small muted">' + esc(s.deskripsi) + '</div>' : '') + '</div>' +
+        '<label class="field bonus-qty"><span class="label">Paket terjual</span><input class="input num" type="number" inputmode="numeric" min="0" step="1" data-qty placeholder="0" aria-label="Paket terjual ' + esc(s.nama) + '"></label>' +
+        '<div class="bonus-calc small" data-calc></div></div>').join('') + '</div>' +
+      '<div class="field mt-4"><span class="label">Screenshot penjualan <span class="req-mark">*</span></span>' +
+        '<div class="row" style="gap:12px;align-items:center;flex-wrap:wrap"><button type="button" class="btn btn-outline" data-pick-shot>' + icon('image') + 'Pilih screenshot</button><span class="small muted" data-shot-name>Belum ada screenshot</span></div>' +
+        '<input type="file" accept="image/*" class="file-input" data-shot-file tabindex="-1" aria-hidden="true">' +
+        '<div data-shot-preview></div><span class="hint">Screenshot dashboard penjualan (TikTok, Shopee, dan sebagainya) yang menunjukkan jumlah paket pada tanggal ini.</span></div>' +
+      '<label class="field mt-4"><span class="label">Keterangan</span><textarea class="textarea" name="keterangan" maxlength="300" placeholder="Contoh: live TikTok 19.00–23.00"></textarea></label>' +
+      '<div class="work-total mt-4" data-total></div><div data-err class="mt-3"></div></div>' +
+    '<div class="card-foot row" style="justify-content:flex-end"><button class="btn btn-primary" type="submit" data-send>' + icon('check') + 'Kirim laporan bonus</button></div></form>' +
+    '<div class="card mt-4"><div class="card-head"><div><div class="card-title">Laporan bonus 7 hari terakhir</div><div class="card-sub">Dihitung ke gaji setelah disetujui HR</div></div></div><div data-history></div></div>';
+  const form = $('[data-bonus-form]', box);
+  const dateInput = $('[name=workDate]', form);
+  const reported = date => reports.filter(r => r.workDate === date && r.status !== 'Ditolak');
+  const refresh = () => {
+    const done = reported(dateInput.value);
+    let total = 0, filled = 0;
+    $$('.bonus-item', form).forEach(el => {
+      const s = byId[el.dataset.scheme];
+      const inp = $('[data-qty]', el);
+      const calc = $('[data-calc]', el);
+      const ex = done.find(r => r.schemeId === s.schemeId);
+      inp.disabled = !!ex;
+      el.classList.toggle('is-done', !!ex);
+      if (ex) {
+        inp.value = '';
+        calc.innerHTML = 'Sudah dilaporkan: ' + ex.jumlah + ' paket · <span class="money">' + esc(Fmt.rupiah(ex.nominal)) + '</span> ' + UI.badge(ex.status);
+        return;
+      }
+      const raw = inp.value.trim();
+      if (raw === '') { calc.textContent = 'Kosongkan bila tidak menjual paket ini.'; return; }
+      const n = Number(raw);
+      if (!Number.isInteger(n) || n < 0) { calc.textContent = 'Isi dengan bilangan bulat, misalnya 100.'; return; }
+      filled++;
+      const lebih = Math.max(0, n - s.target);
+      total += lebih * s.tarif;
+      calc.innerHTML = lebih > 0
+        ? esc(bonusFormula(n, s.target, s.tarif) + ' = ') + '<strong class="money">' + esc(Fmt.rupiah(lebih * s.tarif)) + '</strong>'
+        : esc(bonusFormula(n, s.target, s.tarif) + ': belum ada bonus');
+    });
+    $('[data-total]', form).innerHTML = '<span class="muted">Perkiraan bonus</span><strong class="num">' + esc(Fmt.rupiah(total)) + '</strong><span class="small muted">' + filled + ' jenis paket · menunggu verifikasi HR</span>';
+  };
+  const renderHistory = () => {
+    const t = DataTable({
+      rows: reports, pageSize: 10,
+      empty: { icon: 'wallet', title: 'Belum ada laporan bonus', text: 'Laporan yang Anda kirim akan tampil di sini beserta status verifikasinya.' },
+      columns: [
+        { label: 'Tanggal', cls: 'nowrap', render: r => esc(Fmt.date(r.workDate)) },
+        { label: 'Jenis paket', render: r => '<div class="strong">' + esc(r.namaSkema) + '</div><div class="small muted">' + r.jumlah + ' terjual · target ' + r.target + '</div>' },
+        { label: 'Bonus', cls: 'right', render: r => '<span class="money">' + esc(Fmt.rupiah(r.nominal)) + '</span><div class="small muted nowrap">' + r.paketBonus + ' × ' + esc(Fmt.rupiah(r.tarif)) + '</div>' },
+        { label: 'Status', render: statusCell },
+        { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-view="' + esc(r.bonusId) + '">' + icon('image', 'ic-sm') + 'Screenshot</button>' },
+      ],
+    });
+    const h = $('[data-history]', box);
+    h.innerHTML = '';
+    h.appendChild(t.el);
+  };
+  const resetShot = () => {
+    shot = null;
+    $('[data-shot-name]', form).textContent = 'Belum ada screenshot';
+    $('[data-shot-preview]', form).innerHTML = '';
+  };
+  const clearErr = () => { $('[data-err]', form).innerHTML = ''; };
+  on(form, 'input', '[data-qty]', () => { clearErr(); refresh(); });
+  dateInput.addEventListener('change', () => { clearErr(); refresh(); });
+  on(form, 'click', '[data-pick-shot]', () => { const i = $('[data-shot-file]', form); i.value = ''; i.click(); });
+  $('[data-shot-file]', form).addEventListener('change', async e => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    clearErr();
+    $('[data-shot-name]', form).textContent = 'Memproses screenshot…';
+    try {
+      shot = await screenshotJpeg(file);
+      $('[data-shot-name]', form).textContent = file.name || 'Screenshot dipilih';
+      $('[data-shot-preview]', form).innerHTML = '<img class="shot-thumb mt-2" alt="Pratinjau screenshot penjualan" src="' + shot.dataUrl + '">';
+    } catch (ex) {
+      resetShot();
+      $('[data-shot-preview]', form).innerHTML = '<div class="mt-2">' + UI.callout('danger', esc(ex.message)) + '</div>';
+    }
+  });
+  on(box, 'click', '[data-view]', (e, b) => showBonusPhoto(Object.assign({ nama: App.user.nama }, reports.find(r => r.bonusId === b.dataset.view))));
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const err = $('[data-err]', form);
+    err.innerHTML = '';
+    const items = [];
+    let bad = false;
+    $$('.bonus-item', form).forEach(el => {
+      const inp = $('[data-qty]', el);
+      if (inp.disabled || inp.value.trim() === '') return;
+      const n = Number(inp.value);
+      if (!Number.isInteger(n) || n < 0) bad = true;
+      items.push({ schemeId: el.dataset.scheme, jumlah: n });
+    });
+    const fail = msg => { err.innerHTML = UI.callout('danger', esc(msg)); };
+    if (bad) return fail('Jumlah paket harus bilangan bulat 0 atau lebih.');
+    if (!items.length) return fail('Isi jumlah paket terjual minimal untuk satu jenis paket.');
+    if (!shot) return fail('Lampirkan screenshot penjualan sebagai bukti.');
+    const btn = $('[data-send]', form);
+    UI.busy(btn, true, 'Mengirim…');
+    try {
+      const res = await api('bonus.submit', { workDate: dateInput.value, items: items, photo: shot.dataUrl, photoOrigHash: shot.origHash, keterangan: $('[name=keterangan]', form).value.trim() });
+      if (!App.alive(gen)) return;
+      UI.toast('Laporan bonus terkirim: ' + Fmt.rupiah(res.total) + ', menunggu verifikasi HR.', 'success');
+      reports = res.items.concat(reports);
+      $$('[data-qty]', form).forEach(i => { i.value = ''; });
+      $('[name=keterangan]', form).value = '';
+      resetShot();
+      renderHistory();
+      refresh();
+    } catch (ex) { fail(ex.message); }
+    UI.busy(btn, false);
+  });
+  refresh();
+  renderHistory();
+}
+
+/** HR: jenis paket bonus (bonus per paket, target harian, peserta). */
+async function bonusSchemesCard(box, gen) {
+  const res = await Promise.all([api.swr('bonus.schemes'), metaOptions()]);
+  if (!App.alive(gen)) return;
+  const data = res[0], meta = res[1];
+  box.innerHTML = '<div class="card"><div class="card-head"><div><div class="card-title">Jenis paket bonus</div><div class="card-sub">Setiap jenis paket punya bonus per paket dan target harian sendiri. Hanya peserta yang dipilih yang dapat melapor.</div></div>' +
+    '<button class="btn btn-primary" data-add-scheme>' + icon('plus') + 'Tambah jenis paket</button></div>' +
+    '<div style="padding:12px 20px 0">' + UI.callout('info', 'Mengubah bonus atau target hanya berlaku untuk laporan baru. Laporan yang sudah masuk tetap memakai angka saat dilaporkan.') + '</div><div class="mt-3" data-table></div></div>';
+  const names = list => list.length ? esc(list.slice(0, 3).join(', ')) + (list.length > 3 ? ' <span class="muted">+' + (list.length - 3) + '</span>' : '') : '<span class="faint">Belum ada</span>';
+  const t = DataTable({
+    rows: data.schemes, searchKeys: ['nama', 'deskripsi'], searchPlaceholder: 'Cari jenis paket…',
+    empty: { icon: 'wallet', title: 'Belum ada jenis paket bonus', text: 'Tambahkan jenis paket, bonus per paket, target harian, lalu pilih host yang ikut.' },
+    columns: [
+      { label: 'Jenis paket', render: r => '<div class="strong">' + esc(r.nama) + '</div>' + (r.deskripsi ? '<div class="small muted" style="max-width:360px">' + esc(r.deskripsi) + '</div>' : '') },
+      { label: 'Bonus per paket', cls: 'right money', render: r => esc(Fmt.rupiah(r.tarif)) },
+      { label: 'Target / hari', cls: 'right num', render: r => r.target + ' paket' },
+      { label: 'Peserta', render: r => names(r.pesertaNama) },
+      { label: 'Status', render: r => UI.badge(r.status) },
+      { label: '', cls: 'col-actions', render: r => '<div class="row" style="justify-content:flex-end;gap:4px"><button class="icon-btn tone-primary" data-edit-scheme="' + esc(r.schemeId) + '" aria-label="Edit ' + esc(r.nama) + '">' + icon('edit', 'ic-sm') + '</button>' +
+        '<button class="icon-btn tone-danger" data-del-scheme="' + esc(r.schemeId) + '" aria-label="Hapus ' + esc(r.nama) + '">' + icon('trash', 'ic-sm') + '</button></div>' },
+    ],
+  });
+  $('[data-table]', box).appendChild(t.el);
+  const byId = id => data.schemes.find(s => s.schemeId === id);
+  const form = scheme => {
+    const x = scheme || { status: 'Aktif', tarif: '', target: '', peserta: [] };
+    const chosen = new Set(x.peserta);
+    const m = UI.modal({
+      title: scheme ? 'Edit jenis paket' : 'Tambah jenis paket', size: 'lg',
+      body: '<form class="form-grid" novalidate>' +
+        '<label class="field span-2"><span class="label">Nama jenis paket <span class="req-mark">*</span></span><input class="input" name="nama" maxlength="80" value="' + esc(x.nama) + '" placeholder="Contoh: Paket Reguler"></label>' +
+        '<label class="field span-2"><span class="label">Deskripsi</span><input class="input" name="deskripsi" maxlength="300" value="' + esc(x.deskripsi) + '" placeholder="Contoh: paket harga di bawah Rp 100.000"></label>' +
+        '<label class="field"><span class="label">Bonus per paket (Rp) <span class="req-mark">*</span></span><input class="input num" type="number" inputmode="numeric" min="0" step="100" name="tarif" value="' + esc(x.tarif) + '" placeholder="500"></label>' +
+        '<label class="field"><span class="label">Target minimal per hari (paket) <span class="req-mark">*</span></span><input class="input num" type="number" inputmode="numeric" min="0" step="1" name="target" value="' + esc(x.target) + '" placeholder="40"></label>' +
+        '<p class="span-2 small muted" data-preview></p>' +
+        '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Aktif', 'Nonaktif'], x.status) + '</select></label>' +
+        '<div class="field span-2"><span class="label">Peserta <span class="small muted" data-pcount></span></span><input class="input" data-find placeholder="Cari nama, jabatan, atau departemen…" aria-label="Cari peserta">' +
+          '<div class="pick-list mt-2">' + meta.employees.map(e => '<label class="rate-option' + (chosen.has(e.employeeId) ? ' is-on' : '') + '" data-key="' + esc((e.nama + ' ' + (e.jabatan || '') + ' ' + (e.departemen || '')).toLowerCase()) + '">' +
+            '<input type="checkbox" name="peserta" data-multi="1" value="' + esc(e.employeeId) + '"' + (chosen.has(e.employeeId) ? ' checked' : '') + '>' +
+            '<span class="grow"><span class="strong">' + esc(e.nama) + '</span> <span class="small muted">' + esc([e.jabatan, e.departemen].filter(Boolean).join(' · ')) + '</span></span></label>').join('') + '</div>' +
+          '<span class="hint">Hanya karyawan yang dicentang yang melihat menu Bonus dan dapat melapor penjualan paket ini.</span></div>' +
+        '<div class="span-2" data-err></div></form>',
+      foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('check') + 'Simpan</button>',
+    });
+    const f = $('form', m.el);
+    const preview = () => {
+      const tarif = Number($('[name=tarif]', f).value) || 0, target = Number($('[name=target]', f).value) || 0;
+      const jual = target + 60;
+      $('[data-preview]', f).textContent = tarif ? 'Contoh: host menjual ' + jual + ' paket → (' + jual + ' − ' + target + ') × ' + Fmt.rupiah(tarif) + ' = ' + Fmt.rupiah(60 * tarif) + '. Di bawah ' + target + ' paket, bonus Rp 0.' : '';
+      $('[data-pcount]', f).textContent = '(' + $$('[name=peserta]:checked', f).length + ' dipilih)';
+    };
+    on(f, 'input', '[name=tarif], [name=target]', preview);
+    on(f, 'change', '[name=peserta]', (e, cb) => { cb.closest('.rate-option').classList.toggle('is-on', cb.checked); preview(); });
+    $('[data-find]', f).addEventListener('input', e => {
+      const q = e.target.value.trim().toLowerCase();
+      $$('.pick-list .rate-option', f).forEach(el => { el.classList.toggle('hidden', !!q && el.dataset.key.indexOf(q) < 0); });
+    });
+    preview();
+    $('[data-save]', m.el).addEventListener('click', async () => {
+      const v = UI.formValues(f);
+      if (scheme) v.schemeId = scheme.schemeId;
+      const btn = $('[data-save]', m.el);
+      UI.busy(btn, true, 'Menyimpan…');
+      try { await api('bonus.saveScheme', v); m.close(); UI.toast('Jenis paket disimpan.', 'success'); App.route(); }
+      catch (ex) { UI.busy(btn, false); $('[data-err]', f).innerHTML = UI.callout('danger', esc(ex.message)); }
+    });
+  };
+  on(box, 'click', '[data-add-scheme]', () => form(null));
+  on(box, 'click', '[data-edit-scheme]', (e, b) => form(byId(b.dataset.editScheme)));
+  on(box, 'click', '[data-del-scheme]', async (e, b) => {
+    const s = byId(b.dataset.delScheme);
+    if (!await UI.confirm({ title: 'Hapus jenis paket', message: 'Hapus "' + s.nama + '"? Jika sudah pernah dilaporkan, jenis paket hanya dinonaktifkan agar riwayat bonus tetap utuh.', confirmText: 'Hapus', tone: 'danger' })) return;
+    try { const r = await api('bonus.removeScheme', { schemeId: s.schemeId }); UI.toast(r.message, 'success'); App.route(); } catch (ex) { UI.toast(ex.message, 'danger'); }
+  });
+}
+
+const PayrollTabs = {
+  /* ---------- Verifikasi laporan jobdesk ---------- */
+  verifikasi(body, gen) {
+    return reportVerifier(body, gen, WORK_VERIFIER);
+  },
+
+  /* ---------- Bonus penjualan ---------- */
+  async bonus(body, gen) {
+    const hr = App.user.role === 'admin' || App.user.role === 'hr';
+    const host = !!App.user.hasBonus;
+    body.innerHTML = (host ? '<div data-host>' + UI.loading('Memuat formulir bonus…') + '</div>' : '') +
+      (hr ? '<div data-verify' + (host ? ' class="mt-4"' : '') + '>' + UI.loading('Memuat laporan bonus…') + '</div><div data-schemes class="mt-4"></div>' : '');
+    const jobs = [];
+    if (host) jobs.push(bonusHost($('[data-host]', body), gen));
+    if (hr) {
+      jobs.push(reportVerifier($('[data-verify]', body), gen, BONUS_VERIFIER));
+      jobs.push(bonusSchemesCard($('[data-schemes]', body), gen));
+    }
+    await Promise.all(jobs);
+  },
+
+  /* ---------- Rekap gaji ---------- */
+  async rekap(body, gen) {
+    const today = await todayStr();
+    const meta = await metaOptions();
+    if (!App.alive(gen)) return;
+    body.innerHTML = '<div class="card"><div class="table-tools" style="border-bottom:1px solid var(--border)">' + rangeFields(today.slice(0, 8) + '01', today) +
+      '<label class="field" style="flex:0 1 200px"><span class="label">Departemen</span><select class="select" data-dept>' + UI.options(meta.departments, '', 'Semua') + '</select></label>' +
+      '<div class="row" style="align-self:flex-end;gap:8px"><button class="btn btn-primary" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button>' +
+      '<button class="btn btn-outline" data-csv>' + icon('download', 'ic-sm') + 'CSV rekap</button><button class="btn btn-outline" data-csv-detail>' + icon('download', 'ic-sm') + 'CSV rincian</button></div></div>' +
+      '<div data-sum style="padding:16px 20px"></div><div data-table></div></div>';
+    let current = null;
+    let first = true;
+    const range = () => ({ from: $('[data-from]', body).value, to: $('[data-to]', body).value });
+    const load = async () => {
+      const tbox = $('[data-table]', body);
+      tbox.innerHTML = '<div style="padding:18px">' + UI.loading('Menghitung gaji…') + '</div>';
+      const call = first ? api.swr : api;
+      first = false;
+      try { current = await call('payroll.summary', Object.assign(range(), { departemen: $('[data-dept]', body).value })); }
+      catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
+      if (!App.alive(gen)) return;
+      $('[data-sum]', body).innerHTML = '<div class="summary-line"><div><div class="k">Total gaji (disetujui)</div><div class="v money" style="font-size:26px">' + esc(Fmt.rupiah(current.totalGaji)) + '</div></div>' +
+        '<div><div class="k">Jobdesk</div><div class="v money">' + esc(Fmt.rupiah(current.totalJobdesk)) + '</div></div>' +
+        '<div><div class="k">Bonus penjualan</div><div class="v money">' + esc(Fmt.rupiah(current.totalBonus)) + '</div></div>' +
+        '<div><div class="k">Masih menunggu verifikasi</div><div class="v money">' + esc(Fmt.rupiah(current.totalMenunggu)) + '</div></div>' +
+        '<div><div class="k">Periode</div><div class="v" style="font-size:16px">' + esc(Fmt.date(current.from)) + ' – ' + esc(Fmt.date(current.to)) + '</div></div></div>' +
+        '<p class="small muted mt-3">Gaji = laporan jobdesk + bonus penjualan yang disetujui pada rentang ini. Laporan yang masih menunggu belum dihitung. Dibuat ' + esc(current.generatedAt) + '.</p>';
+      const sumOf = (list, f) => list.reduce((s, r) => s + f(r), 0);
+      const t = DataTable({
+        rows: current.rows, pageSize: 25, searchKeys: ['nama', 'employeeId', 'departemen'], searchPlaceholder: 'Cari karyawan…',
+        empty: { icon: 'wallet', title: 'Belum ada karyawan pada filter ini', text: '' },
+        footer: list => '<tr><td colspan="3">Total (' + list.length + ' karyawan)</td>' +
+          '<td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.jobdesk))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.bonus))) + '</td>' +
+          '<td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.gaji))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.menunggu.total))) + '</td><td></td><td></td></tr>',
+        columns: [
+          { label: 'Karyawan', render: r => UI.person(r.nama, r.employeeId + (r.status !== 'Aktif' ? ' · nonaktif' : '')) },
+          { label: 'Departemen', render: r => esc(r.departemen || '–') },
+          { label: 'Hari dibayar', cls: 'right num', render: r => String(r.hariDibayar) },
+          { label: 'Jobdesk', cls: 'right money', render: r => esc(Fmt.rupiah(r.jobdesk)) },
+          { label: 'Bonus', cls: 'right money', render: r => r.bonus ? esc(Fmt.rupiah(r.bonus)) : '<span class="faint">–</span>' },
+          { label: 'Total gaji', cls: 'right money', render: r => '<span style="font-size:15px">' + esc(Fmt.rupiah(r.gaji)) + '</span>' },
+          { label: 'Menunggu', cls: 'right nowrap', render: r => r.menunggu.count ? '<span class="money">' + esc(Fmt.rupiah(r.menunggu.total)) + '</span><div class="small muted">' + r.menunggu.count + ' laporan</div>' : '<span class="faint">–</span>' },
+          { label: 'Ditolak', cls: 'right num', render: r => r.ditolak.count ? String(r.ditolak.count) : '<span class="faint">–</span>' },
+          { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-detail="' + esc(r.employeeId) + '">Rincian</button>' },
+        ],
+      });
+      tbox.innerHTML = '';
+      tbox.appendChild(t.el);
+    };
+    const detailRows = async (extra) => {
+      const res = await Promise.all([api('work.list', Object.assign(range(), extra)), api('bonus.list', Object.assign(range(), extra))]);
+      return { work: res[0], bonus: res[1] };
+    };
+    on(body, 'click', '[data-detail]', async (e, b) => {
+      const row = current.rows.find(r => r.employeeId === b.dataset.detail);
+      const m = UI.modal({ title: 'Rincian gaji ' + row.nama, size: 'lg', body: UI.loading('Memuat rincian…'), foot: '<button class="btn btn-outline" data-close>Tutup</button>' });
+      try {
+        const d = await detailRows({ employeeId: row.employeeId });
+        const empty = text => '<tr><td colspan="4">' + UI.empty('wallet', text, '') + '</td></tr>';
+        m.body.innerHTML = totalsLine(addTotals(d.work.totals, d.bonus.totals)) +
+          '<h3 class="mt-4" style="font-size:15px">Jobdesk</h3><div class="table-wrap mt-2"><table class="table"><thead><tr><th>Tanggal</th><th>Jobdesk</th><th class="right">Tarif</th><th>Status</th></tr></thead><tbody>' +
+          (d.work.reports.length ? d.work.reports.map(r => '<tr><td class="nowrap">' + esc(Fmt.date(r.workDate)) + '</td><td><div class="strong">' + esc(r.namaJobdesk) + '</div><div class="small muted">' + esc(r.keterangan) + '</div></td><td class="right money">' +
+            esc(Fmt.rupiah(r.tarif)) + '</td><td>' + UI.badge(r.status) + '</td></tr>').join('') : empty('Tidak ada laporan jobdesk pada rentang ini')) + '</tbody></table></div>' +
+          (d.bonus.reports.length ? '<h3 class="mt-4" style="font-size:15px">Bonus penjualan</h3><div class="table-wrap mt-2"><table class="table"><thead><tr><th>Tanggal</th><th>Jenis paket</th><th class="right">Bonus</th><th>Status</th></tr></thead><tbody>' +
+            d.bonus.reports.map(r => '<tr><td class="nowrap">' + esc(Fmt.date(r.workDate)) + '</td><td><div class="strong">' + esc(r.namaSkema) + '</div><div class="small muted">' + r.jumlah + ' terjual · target ' + r.target + '</div></td><td class="right"><span class="money">' +
+              esc(Fmt.rupiah(r.nominal)) + '</span><div class="small muted nowrap">' + r.paketBonus + ' × ' + esc(Fmt.rupiah(r.tarif)) + '</div></td><td>' + UI.badge(r.status) + '</td></tr>').join('') + '</tbody></table></div>' : '');
+      } catch (ex) { m.body.innerHTML = UI.callout('danger', esc(ex.message)); }
+    });
+    $('[data-load]', body).addEventListener('click', load);
+    $('[data-csv]', body).addEventListener('click', () => {
+      if (!current) return;
+      downloadCsv('rekap_gaji_' + current.from + '_' + current.to + '.csv',
+        ['NIK', 'Nama', 'Jabatan', 'Departemen', 'Hari dibayar', 'Laporan jobdesk disetujui', 'Jobdesk (Rp)', 'Bonus (Rp)', 'Total gaji (Rp)', 'Laporan menunggu', 'Nilai menunggu (Rp)', 'Laporan ditolak'],
+        current.rows.map(r => [r.employeeId, r.nama, r.jabatan, r.departemen, r.hariDibayar, r.disetujui.count, r.jobdesk, r.bonus, r.gaji, r.menunggu.count, r.menunggu.total, r.ditolak.count]));
+    });
+    $('[data-csv-detail]', body).addEventListener('click', async () => {
+      try {
+        const d = await detailRows({ departemen: $('[data-dept]', body).value });
+        const rows = d.work.reports.map(r => [r.workDate, r.employeeId, r.nama, r.departemen, 'Jobdesk', r.namaJobdesk, '', '', r.tarif, r.status, r.keterangan, r.diverifikasiOleh, r.catatanVerifikasi])
+          .concat(d.bonus.reports.map(r => [r.workDate, r.employeeId, r.nama, r.departemen, 'Bonus', r.namaSkema, r.jumlah, r.target, r.nominal, r.status, r.keterangan, r.diverifikasiOleh, r.catatanVerifikasi]))
+          .sort((a, b) => (a[0] === b[0] ? String(a[1]).localeCompare(String(b[1])) : (a[0] < b[0] ? -1 : 1)));
+        downloadCsv('rincian_gaji_' + range().from + '_' + range().to + '.csv',
+          ['Tanggal', 'NIK', 'Nama', 'Departemen', 'Jenis', 'Jobdesk / jenis paket', 'Paket terjual', 'Target', 'Nominal (Rp)', 'Status', 'Keterangan', 'Diverifikasi oleh', 'Catatan verifikasi'], rows);
+      } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+    await load();
+  },
+
+  /* ---------- Daftar jobdesk & tarif ---------- */
+  async tarif(body, gen) {
+    const res = await Promise.all([api.swr('rates.list'), metaOptions()]);
+    if (!App.alive(gen)) return;
+    const data = res[0], meta = res[1];
+    body.innerHTML = '<div class="card"><div class="card-head"><div><div class="card-title">Jobdesk & tarif</div><div class="card-sub">Tarif dibayar sekali per hari untuk setiap jobdesk yang dilaporkan saat pulang dan disetujui</div></div>' +
+      (data.canEdit ? '<button class="btn btn-primary" data-add>' + icon('plus') + 'Tambah jobdesk</button>' : '') + '</div>' +
+      '<div style="padding:12px 20px 0">' + UI.callout('info', 'Mengubah tarif hanya berlaku untuk laporan baru. Laporan yang sudah masuk tetap memakai tarif saat dilaporkan.') + '</div><div class="mt-3" data-table></div></div>';
+    const t = DataTable({
+      rows: data.rates, searchKeys: ['nama', 'deskripsi', 'departemen'], searchPlaceholder: 'Cari jobdesk…',
+      empty: { icon: 'wallet', title: 'Belum ada jobdesk bertarif', text: data.canEdit ? 'Tambahkan jobdesk dan tarifnya agar karyawan dapat memilihnya saat check-out.' : 'Admin atau HR belum menambahkan jobdesk bertarif.' },
+      columns: [
+        { label: 'Jobdesk', render: r => '<div class="strong">' + esc(r.nama) + '</div>' + (r.deskripsi ? '<div class="small muted" style="max-width:420px">' + esc(r.deskripsi) + '</div>' : '') },
+        { label: 'Berlaku untuk', render: r => esc(r.departemen || 'Semua departemen') },
+        { label: 'Tarif per laporan', cls: 'right money', render: r => esc(Fmt.rupiah(r.tarif)) },
+        { label: 'Status', render: r => UI.badge(r.status) },
+        { label: '', cls: 'col-actions', render: r => data.canEdit ? '<div class="row" style="justify-content:flex-end;gap:4px"><button class="icon-btn tone-primary" data-edit="' + esc(r.rateId) + '" aria-label="Edit ' + esc(r.nama) + '">' + icon('edit', 'ic-sm') + '</button>' +
+          '<button class="icon-btn tone-danger" data-del="' + esc(r.rateId) + '" aria-label="Hapus ' + esc(r.nama) + '">' + icon('trash', 'ic-sm') + '</button></div>' : '' },
+      ],
+    });
+    $('[data-table]', body).appendChild(t.el);
+    const byId = id => data.rates.find(r => r.rateId === id);
+    const form = rate => {
+      const x = rate || { status: 'Aktif', tarif: '' };
+      const m = UI.modal({
+        title: rate ? 'Edit jobdesk' : 'Tambah jobdesk',
+        body: '<form class="form-grid" novalidate><datalist id="rate-dept">' + meta.departments.map(d => '<option value="' + esc(d) + '">').join('') + '</datalist>' +
+          '<label class="field span-2"><span class="label">Nama jobdesk <span class="req-mark">*</span></span><input class="input" name="nama" maxlength="80" value="' + esc(x.nama) + '" placeholder="Contoh: Packing pesanan"></label>' +
+          '<label class="field span-2"><span class="label">Deskripsi</span><input class="input" name="deskripsi" maxlength="300" value="' + esc(x.deskripsi) + '" placeholder="Contoh: mengemas & memberi label semua pesanan hari itu"></label>' +
+          '<label class="field"><span class="label">Tarif per laporan (Rp) <span class="req-mark">*</span></span><input class="input num" type="number" inputmode="numeric" min="0" step="500" name="tarif" value="' + esc(x.tarif) + '" placeholder="50000"><span class="hint" data-preview></span></label>' +
+          '<label class="field"><span class="label">Berlaku untuk departemen</span><input class="input" name="departemen" list="rate-dept" maxlength="60" value="' + esc(x.departemen) + '" placeholder="Semua departemen"><span class="hint">Kosongkan agar berlaku untuk semua departemen.</span></label>' +
+          '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Aktif', 'Nonaktif'], x.status) + '</select></label>' +
+          '<div class="span-2" data-err></div></form>',
+        foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('check') + 'Simpan</button>',
+      });
+      const tarifInput = $('[name=tarif]', m.el);
+      const preview = () => { $('[data-preview]', m.el).textContent = tarifInput.value ? Fmt.rupiah(tarifInput.value) + ' per hari jobdesk ini dilaporkan' : ''; };
+      tarifInput.addEventListener('input', preview);
+      preview();
+      $('[data-save]', m.el).addEventListener('click', async () => {
+        const v = UI.formValues($('form', m.el));
+        if (rate) v.rateId = rate.rateId;
+        const btn = $('[data-save]', m.el);
+        UI.busy(btn, true, 'Menyimpan…');
+        try { await api('rates.save', v); m.close(); UI.toast('Jobdesk disimpan.', 'success'); App.route(); }
+        catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+      });
+    };
+    on(body, 'click', '[data-add]', () => form(null));
+    on(body, 'click', '[data-edit]', (e, b) => form(byId(b.dataset.edit)));
+    on(body, 'click', '[data-del]', async (e, b) => {
+      const r = byId(b.dataset.del);
+      if (!await UI.confirm({ title: 'Hapus jobdesk', message: 'Hapus "' + r.nama + '"? Jika sudah pernah dilaporkan, jobdesk hanya dinonaktifkan agar riwayat gaji tetap utuh.', confirmText: 'Hapus', tone: 'danger' })) return;
+      try { const res2 = await api('rates.remove', { rateId: r.rateId }); UI.toast(res2.message, 'success'); App.route(); } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+  },
+
+  /* ---------- Gaji saya ---------- */
+  async saya(body, gen) {
+    const today = await todayStr();
+    if (!App.alive(gen)) return;
+    const host = !!App.user.hasBonus;
+    body.innerHTML = '<div class="card"><div class="table-tools" style="border-bottom:1px solid var(--border)">' + rangeFields(today.slice(0, 8) + '01', today) +
+      '<button class="btn btn-primary" style="align-self:flex-end" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button></div>' +
+      '<div data-sum style="padding:16px 20px"></div><div data-table></div></div>' +
+      (host ? '<div class="card mt-4"><div class="card-head"><div><div class="card-title">Bonus penjualan</div><div class="card-sub">Laporan bonus pada rentang yang sama</div></div><a class="btn btn-sm btn-outline" href="#/gaji/bonus">Lapor penjualan</a></div><div data-bonus></div></div>' : '');
+    let current = null, bonus = null;
+    let first = true;
+    const load = async () => {
+      const tbox = $('[data-table]', body);
+      tbox.innerHTML = '<div style="padding:18px">' + UI.loading('Memuat laporan Anda…') + '</div>';
+      const q = { from: $('[data-from]', body).value, to: $('[data-to]', body).value, mine: true };
+      const call = first ? api.swr : api;
+      first = false;
+      try {
+        const res = await Promise.all([call('work.list', q), host ? call('bonus.list', q) : null]);
+        current = res[0]; bonus = res[1];
+      } catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
+      if (!App.alive(gen)) return;
+      const all = bonus ? addTotals(current.totals, bonus.totals) : current.totals;
+      $('[data-sum]', body).innerHTML = totalsLine(all) +
+        (bonus ? '<p class="small mt-3">Disetujui: jobdesk <span class="money">' + esc(Fmt.rupiah(current.totals.Disetujui.total)) + '</span> + bonus <span class="money">' + esc(Fmt.rupiah(bonus.totals.Disetujui.total)) + '</span></p>' : '') +
+        '<p class="small muted mt-2">Bayaran = jumlah tarif laporan jobdesk' + (bonus ? ' dan bonus penjualan' : '') + ' yang disetujui HR. Laporan jobdesk dibuat otomatis saat Anda check-out.</p>';
+      const t = DataTable({
+        rows: current.reports, pageSize: 15,
+        empty: { icon: 'wallet', title: 'Belum ada laporan jobdesk pada rentang ini', text: 'Laporan dibuat saat Anda check-out dengan foto hasil kerja dan keterangan pekerjaan.' },
+        columns: [
+          { label: 'Tanggal', cls: 'nowrap', render: r => esc(Fmt.date(r.workDate)) },
+          { label: 'Jobdesk', render: r => '<div class="strong">' + esc(r.namaJobdesk) + '</div><div class="small muted" style="max-width:340px">' + esc(r.keterangan) + '</div>' },
+          { label: 'Tarif', cls: 'right money', render: r => esc(Fmt.rupiah(r.tarif)) },
+          { label: 'Status', render: r => UI.badge(r.status) + (r.catatanVerifikasi ? '<div class="small muted mt-1">' + esc(r.catatanVerifikasi) + '</div>' : '') },
+          { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-photo="' + esc(r.reportId) + '">' + icon('image', 'ic-sm') + 'Foto</button>' },
+        ],
+      });
+      tbox.innerHTML = '';
+      tbox.appendChild(t.el);
+      if (bonus) {
+        const bt = DataTable({
+          rows: bonus.reports, pageSize: 15,
+          empty: { icon: 'wallet', title: 'Belum ada laporan bonus pada rentang ini', text: 'Kirim laporan penjualan dari tab Bonus.' },
+          columns: [
+            { label: 'Tanggal', cls: 'nowrap', render: r => esc(Fmt.date(r.workDate)) },
+            { label: 'Jenis paket', render: r => '<div class="strong">' + esc(r.namaSkema) + '</div><div class="small muted">' + r.jumlah + ' terjual · target ' + r.target + '</div>' },
+            { label: 'Bonus', cls: 'right', render: r => '<span class="money">' + esc(Fmt.rupiah(r.nominal)) + '</span><div class="small muted nowrap">' + r.paketBonus + ' × ' + esc(Fmt.rupiah(r.tarif)) + '</div>' },
+            { label: 'Status', render: r => UI.badge(r.status) + (r.catatanVerifikasi ? '<div class="small muted mt-1">' + esc(r.catatanVerifikasi) + '</div>' : '') },
+            { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-bonus-photo="' + esc(r.bonusId) + '">' + icon('image', 'ic-sm') + 'Screenshot</button>' },
+          ],
+        });
+        const bbox = $('[data-bonus]', body);
+        bbox.innerHTML = '';
+        bbox.appendChild(bt.el);
+      }
+    };
+    on(body, 'click', '[data-photo]', (e, b) => showWorkPhoto(Object.assign({ nama: App.user.nama }, current.reports.find(r => r.reportId === b.dataset.photo))));
+    on(body, 'click', '[data-bonus-photo]', (e, b) => showBonusPhoto(Object.assign({ nama: App.user.nama }, bonus.reports.find(r => r.bonusId === b.dataset.bonusPhoto))));
+    $('[data-load]', body).addEventListener('click', load);
+    await load();
+  },
+};
+
+Pages.gaji = {
+  async render(view, param, gen) {
+    const role = App.user.role;
+    const hr = role === 'admin' || role === 'hr';
+    const staff = STAFF_ROLES.indexOf(role) >= 0;
+    const host = !!App.user.hasBonus;
+    const tabs = [];
+    if (staff) tabs.push({ id: 'verifikasi', label: 'Verifikasi laporan' });
+    if (hr || host) tabs.push({ id: 'bonus', label: 'Bonus' });
+    if (hr) tabs.push({ id: 'rekap', label: 'Rekap gaji' });
+    if (staff) tabs.push({ id: 'tarif', label: 'Jobdesk & tarif' });
+    if (App.user.employeeId) tabs.push({ id: 'saya', label: 'Gaji saya' });
+    view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Gaji</h1><p class="page-sub">' +
+      (staff ? 'Verifikasi laporan jobdesk dan bonus, rekap gaji, serta tarif setiap jobdesk' : host ? 'Lapor penjualan untuk bonus, laporan jobdesk, dan bayaran Anda' : 'Laporan jobdesk dan bayaran Anda') + '</p></div></div>';
+    if (!tabs.length) {
+      view.insertAdjacentHTML('beforeend', UI.callout('info', 'Akun Anda belum terhubung dengan data karyawan, sehingga tidak memiliki laporan gaji.'));
+      return;
+    }
+    const tab = tabs.some(t => t.id === param) ? param : tabs[0].id;
+    if (tabs.length > 1) view.insertAdjacentHTML('beforeend', '<div class="tabs" style="margin:-6px 0 16px">' + tabs.map(t => '<a class="tab ' + (t.id === tab ? 'is-active' : '') + '" href="#/gaji/' + t.id + '">' + esc(t.label) + '</a>').join('') + '</div>');
+    view.insertAdjacentHTML('beforeend', '<div id="pay-body">' + UI.loading() + '</div>');
+    return PayrollTabs[tab]($('#pay-body', view), gen);
+  },
+};
+</script>

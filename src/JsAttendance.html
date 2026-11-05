@@ -1,0 +1,1062 @@
+<script>
+'use strict';
+/* =========================================================================
+ * Halaman Absensi: kamera langsung (getUserMedia) atau kamera HP lewat input file
+ * bila iframe Google memblokir kamera, GPS (getCurrentPosition),
+ * jam server, checklist persyaratan, konfirmasi, dan bukti absensi.
+ * Check-out juga mewajibkan laporan jobdesk: foto hasil kerja dari kamera,
+ * jobdesk yang dikerjakan, dan keterangan (dasar perhitungan gaji).
+ *
+ * Catatan keamanan: semua pemeriksaan di halaman ini hanya untuk kenyamanan
+ * pengguna. Server memvalidasi ulang nonce, aturan absensi, duplikasi, lokasi, foto,
+ * dan jobdesk, serta menentukan waktu resmi dan tarif.
+ * ========================================================================= */
+
+const GEO_MESSAGES = {
+  1: 'Izin lokasi diperlukan untuk melakukan absensi. Aktifkan izin lokasi untuk situs ini di pengaturan browser, lalu tekan Coba lagi.',
+  2: 'Lokasi tidak tersedia. Pastikan GPS/Location di perangkat aktif dan sinyal memadai.',
+  3: 'Waktu pencarian lokasi habis. Coba lagi di area terbuka.',
+};
+
+function cameraErrorMessage(err) {
+  const n = err && err.name;
+  if (n === 'NotAllowedError' || n === 'SecurityError' || n === 'PermissionDeniedError') {
+    return { title: 'Izin kamera ditolak', text: 'Izinkan akses kamera untuk situs ini di pengaturan browser, lalu tekan Coba lagi.' };
+  }
+  if (n === 'NotFoundError' || n === 'OverconstrainedError' || n === 'DevicesNotFoundError') {
+    return { title: 'Kamera tidak ditemukan', text: 'Perangkat ini tidak memiliki kamera yang dapat digunakan.' };
+  }
+  if (n === 'NotReadableError' || n === 'TrackStartError' || n === 'AbortError') {
+    return { title: 'Kamera sedang digunakan', text: 'Tutup aplikasi lain yang memakai kamera, lalu coba lagi.' };
+  }
+  return { title: 'Kamera tidak dapat diaktifkan', text: (err && err.message) || 'Terjadi kesalahan saat membuka kamera.' };
+}
+
+const SHOT_LABEL = { selfie: 'Selfie', work: 'Foto hasil kerja' };
+
+/**
+ * Web app Apps Script berjalan di iframe Google yang tidak memberi izin kamera,
+ * sehingga getUserMedia selalu ditolak. Bila begitu, foto diambil lewat kamera HP
+ * (input file dengan atribut capture) lalu dicap jam server & lokasi GPS.
+ */
+function liveCameraAllowed() {
+  const fp = document.featurePolicy || document.permissionsPolicy;
+  if (fp && typeof fp.allowsFeature === 'function' && !fp.allowsFeature('camera')) return false;
+  return !!(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+
+async function sha256Hex(buf) {
+  if (!window.crypto || !crypto.subtle) return '';
+  const d = await crypto.subtle.digest('SHA-256', buf);
+  return Array.prototype.map.call(new Uint8Array(d), b => (b < 16 ? '0' : '') + b.toString(16)).join('');
+}
+
+function loadImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => resolve({ img: img, url: url });
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Foto tidak dapat dibaca.')); };
+    img.src = url;
+  });
+}
+
+/** Gambar sumber (video/foto) dipotong tengah ke kanvas 720 × 960. */
+function coverCanvas(src, sw0, sh0) {
+  const W = 720, H = 960;
+  const canvas = document.createElement('canvas');
+  canvas.width = W; canvas.height = H;
+  const scale = Math.max(W / sw0, H / sh0);
+  const sw = W / scale, sh = H / scale;
+  canvas.getContext('2d').drawImage(src, (sw0 - sw) / 2, (sh0 - sh) / 2, sw, sh, 0, 0, W, H);
+  return canvas;
+}
+
+const Att = {
+  reset() {
+    this.view = null;
+    this.gen = -1;
+    this.state = null;
+    this.mode = '';
+    this.cam = { mode: liveCameraAllowed() ? 'live' : 'upload', status: 'idle', stream: null, error: null, devices: [], deviceIds: { selfie: '', work: '' }, mirror: true, resume: false };
+    this.target = 'selfie';
+    this.photos = { selfie: null, work: null };
+    this.work = { rateIds: [], note: '' };
+    this.nonce = null;
+    this.loc = { status: 'idle', reading: null, result: null, message: '', promise: null };
+    this.submitting = false;
+    this.timers = [];
+    this.listeners = [];
+    this.lastSecond = '';
+  },
+
+  alive() { return App.alive(this.gen) && App.pageId === 'absensi'; },
+
+  addListener(target, ev, fn) { target.addEventListener(ev, fn); this.listeners.push([target, ev, fn]); },
+
+  /** Check-out mewajibkan laporan jobdesk (foto hasil kerja + jobdesk + keterangan). */
+  needsWork() { return this.mode === 'checkout' && !!(this.state && this.state.work); },
+
+  async mount(view, param, gen) {
+    this.reset();
+    this.view = view;
+    this.gen = gen;
+    const staff = STAFF_ROLES.indexOf(App.user.role) >= 0;
+    const tab = staff && param === 'tim' ? 'tim' : 'saya';
+    view.innerHTML =
+      '<div class="page-head"><div><h1 class="page-title">Absensi</h1><p class="page-sub">Check-in dan check-out dengan foto selfie langsung dan verifikasi lokasi.</p></div></div>' +
+      (staff ? '<div class="tabs" style="margin:-6px 0 16px"><a class="tab ' + (tab === 'saya' ? 'is-active' : '') + '" href="#/absensi">Absen saya</a>' +
+        '<a class="tab ' + (tab === 'tim' ? 'is-active' : '') + '" href="#/absensi/tim">Monitoring tim</a></div>' : '') +
+      '<div id="att-body">' + UI.loading('Memuat status absensi…') + '</div>';
+    const body = $('#att-body', view);
+    if (tab === 'tim') return TeamAttendance.render(body, gen, { range: 'today' });
+
+    // Satu panggilan: status, jam server, sesi kamera, dan riwayat. Status terakhir dari cache
+    // ditampilkan lebih dulu; server tetap memeriksa ulang semuanya saat absen dikirim.
+    const cacheKey = Cache.key('attendance.state', { withHistory: true });
+    const t0 = performance.now();
+    const fresh = api('attendance.state', { withSession: true, withHistory: true }).then(s => {
+      Clock.adopt(s.serverTime, t0, performance.now());
+      const keep = Object.assign({}, s);
+      delete keep.session;
+      Cache.put(cacheKey, keep);
+      return s;
+    });
+    const hit = Cache.get(cacheKey);
+    let st;
+    if (hit) {
+      st = Cache.read(hit);
+      fresh.then(s => {
+        if (!this.alive() || this.submitting) return;
+        if (s.noEmployee) return App.route();
+        if (s.session) this.nonce = { value: s.session.nonce, action: s.mode, exp: performance.now() + (s.session.ttlSec - 20) * 1000 };
+        this.applyState(s);
+        $('#att-history').innerHTML = renderHistoryList(s.history || []);
+      }, () => { /* status cache tetap tampil; refreshState mencoba lagi */ });
+    } else {
+      try { st = await fresh; } catch (err) {
+        if (this.alive()) body.innerHTML = UI.errorBox(err, 'data-retry');
+        on(body, 'click', '[data-retry]', () => App.route());
+        return;
+      }
+    }
+    if (!this.alive()) return;
+    if (st.noEmployee) {
+      body.innerHTML = '<div class="card"><div class="card-body">' + UI.callout('info', esc(st.message)) +
+        (staff ? '<a class="btn btn-outline mt-4" href="#/absensi/tim">' + icon('users') + 'Buka monitoring tim</a>' : '') + '</div></div>';
+      return;
+    }
+    if (st.session) this.nonce = { value: st.session.nonce, action: st.mode, exp: performance.now() + (st.session.ttlSec - 20) * 1000 };
+    this.renderLayout(body);
+    this.applyState(st);
+    $('#att-history').innerHTML = renderHistoryList(st.history || []);
+    this.lastSecond = null;
+    this.tick();
+    this.timers.push(setInterval(() => this.tick(), 250));
+    this.timers.push(setInterval(() => this.refreshState(), 60000));
+    this.addListener(document, 'visibilitychange', () => this.onVisibility());
+    this.addListener(window, 'pagehide', () => this.stopCamera());
+    this.addListener(document, 'clock:sync', () => this.renderReqs());
+  },
+
+  unmount() {
+    this.stopCamera();
+    this.timers.forEach(t => clearInterval(t));
+    this.listeners.forEach(l => l[0].removeEventListener(l[1], l[2]));
+    this.timers = [];
+    this.listeners = [];
+    this.gen = -1;
+  },
+
+  renderLayout(body) {
+    body.innerHTML =
+      '<div class="att-grid">' +
+        '<div class="att-col">' +
+          '<div class="card att-o1">' +
+            '<div class="clock">' +
+              '<div class="clock-top"><span class="clock-label">Jam server</span><span class="sync" id="att-sync"><span class="dot"></span><span data-t>Menyinkronkan…</span></span></div>' +
+              '<div class="clock-time" id="att-time" aria-live="off">--:--:--</div>' +
+              '<div class="clock-date" id="att-date">&nbsp;</div>' +
+              '<div class="small muted mt-2" id="att-sched"></div>' +
+            '</div>' +
+            '<div class="today-strip"><div class="today-cell"><div class="k">Masuk</div><div class="v" id="att-in">–</div></div>' +
+            '<div class="today-cell"><div class="k">Pulang</div><div class="v" id="att-out">–</div></div></div>' +
+          '</div>' +
+          '<div class="att-o2" id="att-rule"></div>' +
+          '<div class="card att-o5"><div class="card-head"><div><div class="card-title">Persyaratan absensi</div><div class="card-sub">Tombol absensi aktif setelah semua terpenuhi</div></div></div>' +
+            '<div class="card-body" style="padding-top:8px"><ul class="reqs" id="att-reqs"></ul></div></div>' +
+        '</div>' +
+        '<div class="att-col">' +
+          '<div class="card att-o3"><div class="card-head"><div><div class="card-title" id="att-cam-title">Foto selfie</div><div class="card-sub" id="att-cam-sub">Ambil langsung dari kamera. Wajah harus terlihat jelas.</div></div>' +
+            '<button class="btn btn-sm btn-outline hidden" id="att-switch">' + icon('switchCam', 'ic-sm') + '<span>Ganti kamera</span></button></div>' +
+            '<div class="card-body">' +
+              '<div class="shot-tabs hidden" id="att-shots" role="tablist"></div>' +
+              '<div class="cam-frame" id="att-frame">' +
+                '<video id="att-video" playsinline muted autoplay></video>' +
+                '<img id="att-photo" class="hidden" alt="Pratinjau foto">' +
+                '<div class="cam-guide hidden" id="att-guide"><div class="cam-hint" id="att-hint">Posisikan wajah di dalam bingkai</div></div>' +
+                '<div class="cam-state" id="att-camstate"></div>' +
+                '<div class="cam-badge hidden" id="att-badge"></div>' +
+                '<div class="cam-flash" id="att-flash"></div>' +
+              '</div>' +
+              '<div class="cam-controls" id="att-camctl"></div>' +
+              '<input type="file" accept="image/*" class="file-input" id="att-file" tabindex="-1" aria-hidden="true">' +
+              '<div class="lock-line" id="att-lock"></div>' +
+              '<div id="att-face"></div>' +
+            '</div></div>' +
+          '<div class="card att-o4 hidden" id="att-work"></div>' +
+          '<div class="card att-submit att-o6"><div class="submit-panel">' +
+            '<button class="btn btn-accent btn-lg btn-block" id="att-submit" disabled>Check-in sekarang</button>' +
+            '<div class="submit-note" id="att-note"></div></div></div>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card mt-4"><div class="card-head"><div><div class="card-title">Riwayat absensi saya</div><div class="card-sub">31 hari terakhir</div></div></div>' +
+        '<div class="card-body" id="att-history">' + UI.loading('Memuat riwayat…') + '</div></div>';
+
+    on(body, 'click', '[data-cam="start"]', () => this.startCamera());
+    on(body, 'click', '[data-cam="stop"]', () => { this.stopCamera(); this.cam.status = 'idle'; this.renderCamera(); this.renderReqs(); });
+    on(body, 'click', '[data-cam="shoot"]', () => this.capture());
+    on(body, 'click', '[data-cam="file"]', () => this.openFilePicker());
+    $('#att-file').addEventListener('change', e => this.onFile(e.target.files && e.target.files[0]));
+    on(body, 'click', '[data-cam="retake"]', () => this.retake(this.target));
+    on(body, 'click', '[data-shot]', (e, b) => this.selectTarget(b.dataset.shot));
+    on(body, 'click', '[data-loc="retry"]', () => this.locate(true));
+    on(body, 'change', '[data-rate]', (e, inp) => {
+      const id = inp.value;
+      this.work.rateIds = inp.checked ? this.work.rateIds.concat([id]).filter((v, i, a) => a.indexOf(v) === i) : this.work.rateIds.filter(x => x !== id);
+      inp.closest('.rate-option').classList.toggle('is-on', inp.checked);
+      this.renderWorkTotal();
+      this.renderReqs();
+    });
+    on(body, 'input', '#att-work-note', (e, ta) => {
+      this.work.note = ta.value;
+      const c = $('#att-work-count');
+      if (c) c.textContent = ta.value.trim().length + '/500';
+      this.renderReqs();
+    });
+    $('#att-switch').addEventListener('click', () => this.switchCamera());
+    $('#att-submit').addEventListener('click', () => this.onSubmit());
+  },
+
+  actionable() { return !!this.state && (this.mode === 'checkin' || this.mode === 'checkout') && this.state.ok; },
+
+  applyState(st) {
+    const prevMode = this.mode;
+    this.state = st;
+    this.mode = st.mode;
+    if (prevMode && prevMode !== st.mode) {
+      this.photos = { selfie: null, work: null };
+      this.target = 'selfie';
+      this.nonce = null;
+    }
+    const r = st.record;
+    $('#att-in').innerHTML = r && r.checkIn ? esc(r.checkIn.slice(0, 5)) : '<span class="empty-v">–</span>';
+    $('#att-out').innerHTML = r && r.checkOut ? esc(r.checkOut.slice(0, 5)) : '<span class="empty-v">–</span>';
+    $('#att-in').className = 'v' + (r && r.checkIn ? '' : ' empty-v');
+    $('#att-out').className = 'v' + (r && r.checkOut ? '' : ' empty-v');
+    // Tanpa jadwal kerja: karyawan bebas memilih jam masuk & pulang.
+    const sched = $('#att-sched');
+    sched.innerHTML = icon('calendarClock', 'ic-sm') + ' Jam bebas · absen kapan saja';
+    sched.style.display = 'flex';
+    sched.style.gap = '6px';
+    sched.style.alignItems = 'center';
+
+    let rule = '';
+    if (st.mode === 'done') {
+      rule = UI.callout('success', '<strong>Absensi hari ini selesai.</strong> ' + esc(st.message.replace(/^Absensi hari ini sudah lengkap\s*/, '')) +
+        (r && r.workMinutes ? ' Durasi kerja ' + esc(Fmt.minutes(r.workMinutes)) + '.' : ''));
+    } else if (!st.ok) {
+      rule = UI.callout(st.code === 'ON_LEAVE' ? 'info' : 'warning', esc(st.message));
+    }
+    $('#att-rule').innerHTML = rule;
+    $('#att-rule').style.display = rule ? '' : 'none';
+
+    const btn = $('#att-submit');
+    btn.innerHTML = this.mode === 'checkout' ? icon('logout') + 'Check-out sekarang' : this.mode === 'done' ? icon('checkCircle') + 'Absensi hari ini selesai' : icon('login') + 'Check-in sekarang';
+
+    this.renderWorkForm();
+    if (this.actionable()) {
+      if (this.cam.status === 'idle' && !this.photos[this.target] && !document.hidden) this.startCamera();
+      if (this.loc.status === 'idle') this.locate();
+    } else {
+      this.stopCamera();
+      if (!this.photos[this.target]) this.cam.status = 'idle';
+    }
+    this.renderCamera();
+    this.renderReqs();
+  },
+
+  async refreshState() {
+    if (this.submitting || !this.alive()) return;
+    try {
+      const st = await api('attendance.state');
+      if (this.alive() && !this.submitting) this.applyState(st);
+    } catch (e) { /* dicoba lagi pada interval berikutnya */ }
+  },
+
+  onVisibility() {
+    if (document.hidden) {
+      if (this.cam.status === 'live') { this.cam.resume = true; this.stopCamera(); this.cam.status = 'idle'; this.renderCamera(); this.renderReqs(); }
+    } else {
+      Clock.sync().catch(() => {});
+      if (this.cam.resume && !this.photos[this.target] && this.actionable()) { this.cam.resume = false; this.startCamera(); }
+      this.refreshState();
+    }
+  },
+
+  /* ---------- Jam ---------- */
+  tick() {
+    const n = Clock.now();
+    const t = $('#att-time');
+    if (!t) return;
+    if (n) {
+      const s = Clock.timeStr(n);
+      if (s !== this.lastSecond) {
+        this.lastSecond = s;
+        t.innerHTML = esc(s) + '<span class="tz">' + esc(Clock.abbr()) + '</span>';
+        $('#att-date').textContent = Clock.dateLabel(n);
+        if (s.slice(-1) === '0') this.renderSync();
+      }
+    }
+  },
+
+  renderSync() {
+    const el = $('#att-sync');
+    if (!el) return;
+    const ok = Clock.synced();
+    el.className = 'sync ' + (ok ? 'is-ok' : Clock.base ? 'is-bad' : '');
+    $('[data-t]', el).textContent = ok ? 'Tersinkron dengan server' : Clock.base ? 'Sinkronisasi tertunda' : 'Menyinkronkan…';
+  },
+
+  /* ---------- Kamera ---------- */
+  selectTarget(t) {
+    if (t === this.target || !SHOT_LABEL[t]) return;
+    if (t === 'work' && !this.needsWork()) return;
+    this.stopCamera();
+    this.cam.status = 'idle';
+    this.target = t;
+    this.renderCamera();
+    this.renderReqs();
+    if (!this.photos[t]) this.startCamera();
+  },
+
+  uploadAllowed() { return !!(this.state && this.state.rules && this.state.rules.allowPhotoUpload); },
+
+  async startCamera() {
+    if (!this.actionable() || this.photos[this.target]) return;
+    if (this.cam.mode === 'upload') { this.cam.status = 'idle'; this.renderCamera(); this.renderReqs(); return; }
+    if (this.cam.status === 'starting' || this.cam.status === 'live') return;
+    if (!window.isSecureContext || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      this.cam.status = 'error';
+      this.cam.error = { title: 'Kamera tidak didukung', text: !window.isSecureContext ? 'Kamera hanya dapat digunakan melalui koneksi aman (HTTPS).' : 'Browser ini tidak mendukung akses kamera. Gunakan Chrome atau Safari versi terbaru.' };
+      this.renderCamera(); this.renderReqs();
+      return;
+    }
+    const target = this.target;
+    this.cam.status = 'starting';
+    this.renderCamera(); this.renderReqs();
+    const video = { width: { ideal: 1280 }, height: { ideal: 960 } };
+    if (this.cam.deviceIds[target]) video.deviceId = { exact: this.cam.deviceIds[target] };
+    else video.facingMode = { ideal: target === 'work' ? 'environment' : 'user' };
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: video, audio: false });
+    } catch (err) {
+      if (!this.alive()) return;
+      this.cam.error = cameraErrorMessage(err);
+      if (this.uploadAllowed() && ['NotAllowedError', 'SecurityError', 'PermissionDeniedError', 'NotFoundError', 'OverconstrainedError'].indexOf(err && err.name) >= 0) {
+        this.cam.mode = 'upload';
+        this.cam.status = 'idle';
+      } else this.cam.status = 'error';
+      this.renderCamera(); this.renderReqs();
+      return;
+    }
+    if (!this.alive() || this.target !== target || this.photos[target] || !this.actionable()) { stream.getTracks().forEach(t => t.stop()); return; }
+    this.cam.stream = stream;
+    const track = stream.getVideoTracks()[0];
+    const settings = track && track.getSettings ? track.getSettings() : {};
+    if (settings.deviceId) this.cam.deviceIds[target] = settings.deviceId;
+    // Selfie dicerminkan seperti cermin; foto hasil kerja tidak.
+    this.cam.mirror = target === 'selfie' && settings.facingMode !== 'environment';
+    if (track) track.addEventListener('ended', () => {
+      if (this.cam.stream === stream) { this.cam.stream = null; this.cam.status = 'error'; this.cam.error = { title: 'Kamera terputus', text: 'Akses kamera berhenti. Tekan Coba lagi.' }; this.renderCamera(); this.renderReqs(); }
+    });
+    const v = $('#att-video');
+    v.srcObject = stream;
+    try { await v.play(); } catch (e) { /* autoplay sudah muted */ }
+    this.cam.status = 'live';
+    this.renderCamera(); this.renderReqs();
+    try {
+      const devs = await navigator.mediaDevices.enumerateDevices();
+      this.cam.devices = devs.filter(d => d.kind === 'videoinput');
+    } catch (e) { this.cam.devices = []; }
+    $('#att-switch').classList.toggle('hidden', this.cam.devices.length < 2);
+    this.ensureNonce().catch(err => UI.toast(err.message, 'danger'));
+  },
+
+  stopCamera() {
+    if (this.cam && this.cam.stream) {
+      this.cam.stream.getTracks().forEach(t => t.stop());
+      this.cam.stream = null;
+    }
+    const v = document.getElementById('att-video');
+    if (v) { try { v.pause(); } catch (e) { /* abaikan */ } v.srcObject = null; }
+    if (this.cam && (this.cam.status === 'live' || this.cam.status === 'starting')) this.cam.status = 'idle';
+  },
+
+  switchCamera() {
+    const devs = this.cam.devices;
+    if (devs.length < 2) return;
+    const cur = this.cam.deviceIds[this.target];
+    const idx = devs.findIndex(d => d.deviceId === cur);
+    this.cam.deviceIds[this.target] = devs[(idx + 1) % devs.length].deviceId;
+    this.stopCamera();
+    this.startCamera();
+  },
+
+  /** Nonce sesi kamera. Bila diperbarui, foto lain yang terikat nonce lama harus diambil ulang. */
+  async ensureNonce() {
+    if (this.nonce && this.nonce.action === this.mode && performance.now() < this.nonce.exp) return this.nonce;
+    const r = await api('attendance.begin', { action: this.mode });
+    this.nonce = { value: r.nonce, action: this.mode, exp: performance.now() + (r.ttlSec - 20) * 1000 };
+    let cleared = false;
+    Object.keys(this.photos).forEach(k => {
+      if (this.photos[k] && this.photos[k].nonce !== r.nonce && k !== this.target) { this.photos[k] = null; cleared = true; }
+    });
+    if (cleared) UI.toast('Sesi foto diperbarui. Foto sebelumnya perlu diambil ulang.', 'warning');
+    return this.nonce;
+  },
+
+  frameQuality(canvas) {
+    const c = document.createElement('canvas');
+    c.width = 32; c.height = 32;
+    const x = c.getContext('2d');
+    x.drawImage(canvas, 0, 0, 32, 32);
+    const d = x.getImageData(0, 0, 32, 32).data;
+    let sum = 0, sq = 0;
+    const n = d.length / 4;
+    for (let i = 0; i < d.length; i += 4) {
+      const l = 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+      sum += l; sq += l * l;
+    }
+    const mean = sum / n;
+    const std = Math.sqrt(Math.max(0, sq / n - mean * mean));
+    return { mean: mean, std: std, dark: mean < 28, flat: std < 6 };
+  },
+
+  /** Cap pada foto: nama, jam server, lokasi GPS terverifikasi, sesi. Tidak dapat diubah pengguna. */
+  stamp(ctx, W, H, shot, target) {
+    const ms = Clock.now();
+    const band = 128;
+    const res = this.loc.result, rd = this.loc.reading;
+    ctx.fillStyle = 'rgba(8, 15, 30, 0.72)';
+    ctx.fillRect(0, H - band, W, band);
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '600 25px Manrope, system-ui, sans-serif';
+    const label = target === 'work' ? 'BUKTI KERJA' : this.mode === 'checkout' ? 'CHECK-OUT' : 'CHECK-IN';
+    ctx.fillText(this.state.employee.nama + ' · ' + label, 22, H - band + 14);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.88)';
+    ctx.font = '400 19px Manrope, system-ui, sans-serif';
+    ctx.fillText(Clock.dateLabel(ms) + '  ' + Clock.timeStr(ms) + ' ' + Clock.abbr() + ' (jam server)', 22, H - band + 47);
+    ctx.fillText(res && rd ? 'Lokasi: ' + res.locationName + ' · ' + Fmt.dist(res.distance) + ' · ' + rd.lat.toFixed(5) + ', ' + rd.lng.toFixed(5) + ' (±' + Math.round(rd.accuracy) + ' m)' : 'Lokasi: belum terverifikasi', 22, H - band + 74);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.62)';
+    ctx.font = '400 15px Manrope, system-ui, sans-serif';
+    ctx.fillText((App.company.companyName || '') + ' · sesi ' + shot.nonce.slice(0, 8) + ' · ' + (shot.source === 'lampiran' ? 'kamera HP' : 'kamera langsung'), 22, H - band + 101);
+  },
+
+  /** Foto akhir yang dikirim: salinan kanvas asli + cap terbaru. */
+  finalPhoto(target) {
+    const shot = this.photos[target];
+    const c = document.createElement('canvas');
+    c.width = shot.canvas.width; c.height = shot.canvas.height;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(shot.canvas, 0, 0);
+    this.stamp(ctx, c.width, c.height, shot, target);
+    return c.toDataURL('image/jpeg', 0.82);
+  },
+
+  /** Membuka kamera HP. Harus dipanggil langsung dari klik (bukan setelah await). */
+  openFilePicker() {
+    if (!this.actionable()) return;
+    if (!this.uploadAllowed()) { UI.toast('Admin menonaktifkan foto dari kamera HP. Hubungi Admin.', 'danger'); return; }
+    const input = $('#att-file');
+    input.setAttribute('capture', this.target === 'work' ? 'environment' : 'user');
+    input.value = '';
+    input.click();
+  },
+
+  async onFile(file) {
+    if (!file || !this.alive()) return;
+    if (file.type && !/^image\//.test(file.type)) { UI.toast('File harus berupa foto.', 'warning'); return; }
+    const target = this.target;
+    this.cam.status = 'processing';
+    this.renderCamera();
+    try {
+      const nonce = await this.ensureNonce();
+      // Umur file dihitung dari jam perangkat terhadap jam perangkat (keduanya sama), hanya untuk penanda.
+      const ageSec = file.lastModified ? Math.max(0, Math.round((Date.now() - file.lastModified) / 1000)) : null;
+      const origHash = await sha256Hex(await file.arrayBuffer());
+      const loaded = await loadImageFile(file);
+      const canvas = coverCanvas(loaded.img, loaded.img.naturalWidth, loaded.img.naturalHeight);
+      URL.revokeObjectURL(loaded.url);
+      const q = this.frameQuality(canvas);
+      if (q.dark || q.flat) {
+        UI.toast(q.dark ? 'Foto terlalu gelap. Cari tempat dengan pencahayaan cukup, lalu ambil ulang.' : 'Foto tampak kosong. Ambil ulang dengan objek terlihat jelas.', 'warning');
+        this.cam.status = 'idle';
+        this.renderCamera();
+        return;
+      }
+      const faceCheck = target === 'selfie' ? await this.faceCheck(canvas) : 'off';
+      this.photos[target] = { canvas: canvas, previewUrl: canvas.toDataURL('image/jpeg', 0.8), takenAt: Clock.now(), faceCheck: faceCheck, nonce: nonce.value, source: 'lampiran', origHash: origHash, ageSec: ageSec };
+      this.afterShot(target);
+    } catch (err) {
+      UI.toast(err && err.message ? err.message : 'Foto tidak dapat diproses. Coba ambil ulang.', 'danger');
+      this.cam.status = 'idle';
+      this.renderCamera();
+    }
+  },
+
+  afterShot(target) {
+    this.cam.status = 'captured';
+    if (target === 'selfie' && this.needsWork() && !this.photos.work) {
+      this.target = 'work';
+      this.cam.status = 'idle';
+      this.renderCamera();
+      this.renderReqs();
+      UI.toast('Selfie tersimpan. Sekarang foto hasil kerja Anda.', 'success');
+      this.startCamera();
+      return;
+    }
+    this.renderCamera();
+    this.renderReqs();
+  },
+
+  async capture() {
+    if (this.cam.status !== 'live') return;
+    const target = this.target;
+    const v = $('#att-video');
+    if (!v.videoWidth) { UI.toast('Kamera belum siap. Tunggu sebentar.', 'warning'); return; }
+    const shoot = $('[data-cam="shoot"]');
+    if (shoot) shoot.disabled = true;
+    let nonce;
+    try { nonce = await this.ensureNonce(); } catch (err) {
+      UI.toast(err.message, 'danger');
+      if (shoot) shoot.disabled = false;
+      return;
+    }
+    if (!this.alive() || this.cam.status !== 'live' || this.target !== target) return;
+    const canvas = coverCanvas(v, v.videoWidth, v.videoHeight);
+    const q = this.frameQuality(canvas);
+    if (q.dark || q.flat) {
+      UI.toast(q.dark ? 'Foto terlalu gelap. Cari tempat dengan pencahayaan cukup, lalu ambil ulang.' : 'Gambar kamera tampak kosong. Pastikan kamera tidak tertutup.', 'warning');
+      if (shoot) shoot.disabled = false;
+      return;
+    }
+    const faceCheck = target === 'selfie' ? await this.faceCheck(canvas) : 'off';
+    const flash = $('#att-flash');
+    flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
+    this.photos[target] = { canvas: canvas, previewUrl: canvas.toDataURL('image/jpeg', 0.8), takenAt: Clock.now(), faceCheck: faceCheck, nonce: nonce.value, source: 'kamera', origHash: '', ageSec: null };
+    this.stopCamera();
+    // Check-out: setelah selfie, lanjut otomatis ke foto hasil kerja.
+    this.afterShot(target);
+  },
+
+  async faceCheck(canvas) {
+    if (!this.state.rules || this.state.rules.faceCheck !== 'advisory') return 'off';
+    if (!('FaceDetector' in window)) return 'unsupported';
+    try {
+      const faces = await new window.FaceDetector({ fastMode: true, maxDetectedFaces: 3 }).detect(canvas);
+      return faces.length ? 'detected' : 'not_detected';
+    } catch (e) { return 'unsupported'; }
+  },
+
+  retake(target) {
+    target = target || this.target;
+    this.photos[target] = null;
+    if (this.nonce && this.nonce.exp - performance.now() < 120000) this.nonce = null;
+    this.stopCamera();
+    this.target = target;
+    this.cam.status = 'idle';
+    this.renderCamera();
+    this.renderReqs();
+    if (this.cam.mode === 'upload') this.openFilePicker(); else this.startCamera();
+  },
+
+  renderCamera() {
+    if (!$('#att-frame')) return;
+    const st = this.cam.status;
+    const target = this.target;
+    const photo = this.photos[target];
+    const video = $('#att-video'), img = $('#att-photo'), guide = $('#att-guide'), state = $('#att-camstate'), badge = $('#att-badge'), ctl = $('#att-camctl');
+    const work = this.needsWork();
+    $('#att-cam-title').textContent = work ? 'Foto check-out' : 'Foto selfie';
+    $('#att-cam-sub').textContent = target === 'work'
+      ? 'Foto hasil pekerjaan hari ini langsung dari kamera (mis. paket yang dikemas, rak yang dirapikan).'
+      : 'Ambil langsung dari kamera. Wajah harus terlihat jelas.';
+    const tabs = $('#att-shots');
+    tabs.classList.toggle('hidden', !work || !this.actionable());
+    if (work) {
+      tabs.innerHTML = ['selfie', 'work'].map((k, i) => '<button type="button" role="tab" class="shot-tab' + (k === target ? ' is-active' : '') + '" data-shot="' + k + '" aria-selected="' + (k === target) + '">' +
+        '<span class="shot-num">' + (this.photos[k] ? icon('check', 'ic-sm') : (i + 1)) + '</span>' + esc(SHOT_LABEL[k]) + '</button>').join('');
+    }
+    $('#att-hint').textContent = target === 'work' ? 'Arahkan kamera ke hasil pekerjaan' : 'Posisikan wajah di dalam bingkai';
+    video.classList.toggle('hidden', st !== 'live');
+    video.classList.toggle('mirror', this.cam.mirror);
+    guide.classList.toggle('hidden', st !== 'live');
+    guide.classList.toggle('guide-work', target === 'work');
+    img.classList.toggle('hidden', !photo);
+    if (photo) img.src = photo.previewUrl; else img.removeAttribute('src');
+    const upload = this.cam.mode === 'upload';
+    let s = '';
+    if (photo) s = '';
+    else if (this.mode === 'done') s = icon('checkCircle') + '<div class="t">Absensi hari ini selesai</div><p>Kamera tidak diperlukan. Sampai jumpa di hari kerja berikutnya.</p>';
+    else if (!this.actionable()) s = icon('clock') + '<div class="t">Belum dapat melakukan absensi</div><p>' + esc(this.state ? this.state.message : '') + '</p>';
+    else if (st === 'processing') s = '<span class="spinner" style="width:28px;height:28px;color:#94a3b8"></span><div class="t">Memproses foto…</div>';
+    else if (upload && !this.uploadAllowed()) s = icon('cameraOff') + '<div class="t">Kamera tidak dapat dipakai</div><p>Browser membatasi kamera langsung di aplikasi ini dan Admin menonaktifkan foto dari kamera HP. Hubungi Admin.</p>';
+    else if (upload) s = icon('camera') + '<div class="t">' + (target === 'work' ? 'Foto hasil kerja' : 'Foto selfie') + '</div><p>Tekan tombol di bawah untuk membuka kamera HP. Jam server dan lokasi GPS dicap otomatis pada foto dan tidak dapat diubah.</p>' +
+      '<button class="btn btn-accent" data-cam="file">' + icon('camera') + 'Buka kamera</button>';
+    else if (st === 'starting') s = '<span class="spinner" style="width:28px;height:28px;color:#94a3b8"></span><div class="t">Meminta izin kamera…</div><p>Pilih "Izinkan" saat browser meminta akses kamera.</p>';
+    else if (st === 'error') s = icon('cameraOff') + '<div class="t">' + esc(this.cam.error.title) + '</div><p>' + esc(this.cam.error.text) + '</p><button class="btn btn-primary" data-cam="start">' + icon('refresh') + 'Coba lagi</button>';
+    else s = icon('camera') + '<div class="t">Kamera belum aktif</div><p>' + (target === 'work' ? 'Aktifkan kamera untuk memotret hasil pekerjaan Anda.' : 'Izinkan akses kamera untuk mengambil foto selfie absensi.') + '</p><button class="btn btn-primary" data-cam="start">' + icon('camera') + 'Aktifkan kamera</button>';
+    state.innerHTML = s;
+    state.classList.toggle('hidden', !s);
+    if (st === 'live') { badge.innerHTML = '<span class="live"></span>Kamera aktif'; badge.classList.remove('hidden'); }
+    else if (photo) { badge.innerHTML = icon('check', 'ic-sm') + esc(SHOT_LABEL[target]) + ' ' + esc(Clock.timeStr(photo.takenAt)) + (photo.source === 'lampiran' ? ' · kamera HP' : ''); badge.classList.remove('hidden'); }
+    else badge.classList.add('hidden');
+    if (st === 'live') {
+      ctl.innerHTML = '<button class="btn btn-ghost btn-sm" data-cam="stop">' + icon('cameraOff', 'ic-sm') + 'Matikan</button>' +
+        '<button class="shutter" data-cam="shoot" aria-label="Ambil ' + esc(SHOT_LABEL[target].toLowerCase()) + '">' + icon('camera', 'ic-lg') + '</button><span style="width:86px"></span>';
+    } else if (photo && this.actionable()) {
+      ctl.innerHTML = '<button class="btn btn-outline" data-cam="retake">' + icon('refresh') + 'Ulangi ' + esc(SHOT_LABEL[target].toLowerCase()) + '</button>' +
+        (work && target === 'selfie' && !this.photos.work ? '<button class="btn btn-primary" data-shot="work">Lanjut foto hasil kerja</button>' : '');
+    } else ctl.innerHTML = '';
+    $('#att-switch').classList.toggle('hidden', !(st === 'live' && this.cam.devices.length > 1));
+    this.renderLock();
+    const face = $('#att-face');
+    const fc = target === 'selfie' && photo && photo.faceCheck;
+    face.innerHTML = fc === 'not_detected'
+      ? UI.callout('warning', 'Wajah tidak terdeteksi. Sebaiknya ulangi foto dengan wajah terlihat jelas. Jika dilanjutkan, foto akan ditandai untuk ditinjau HR.')
+      : fc === 'detected' ? UI.callout('success', 'Wajah terdeteksi pada foto.')
+        : fc === 'unsupported' ? '<p class="small muted center">Pemeriksaan wajah otomatis tidak didukung browser ini.</p>' : '';
+    face.classList.toggle('mt-3', !!face.innerHTML);
+  },
+
+  /* ---------- Laporan jobdesk (check-out) ---------- */
+  renderWorkForm() {
+    const box = $('#att-work');
+    if (!box) return;
+    const show = this.needsWork() && this.actionable();
+    box.classList.toggle('hidden', !show);
+    if (!show) { box.innerHTML = ''; return; }
+    const rates = this.state.work.rates || [];
+    const valid = rates.map(r => r.rateId);
+    this.work.rateIds = this.work.rateIds.filter(id => valid.indexOf(id) >= 0);
+    box.innerHTML =
+      '<div class="card-head"><div><div class="card-title">Laporan jobdesk hari ini</div><div class="card-sub">Wajib saat pulang. Dibayar sesuai tarif setelah diverifikasi HR.</div></div></div>' +
+      '<div class="card-body">' +
+        (rates.length
+          ? '<fieldset class="rate-list"><legend class="label">Jobdesk yang Anda kerjakan</legend>' + rates.map(r => {
+            const on = this.work.rateIds.indexOf(r.rateId) >= 0;
+            return '<label class="rate-option' + (on ? ' is-on' : '') + '"><input type="checkbox" data-rate value="' + esc(r.rateId) + '"' + (on ? ' checked' : '') + '>' +
+              '<span class="grow"><span class="rate-name">' + esc(r.nama) + '</span>' + (r.deskripsi ? '<span class="rate-desc">' + esc(r.deskripsi) + '</span>' : '') + '</span>' +
+              '<span class="rate-price num">' + esc(Fmt.rupiah(r.tarif)) + '</span></label>';
+          }).join('') + '</fieldset>'
+          : UI.callout('neutral', 'Admin belum mengatur daftar jobdesk bertarif untuk departemen Anda. Tetap lampirkan foto hasil kerja dan tuliskan pekerjaan Anda.')) +
+        '<label class="field mt-4"><span class="label">Apa yang Anda kerjakan hari ini? <span class="req-mark">*</span></span>' +
+          '<textarea class="textarea" id="att-work-note" maxlength="500" placeholder="Contoh: packing 40 pesanan Shopee, merapikan rak aksesoris">' + esc(this.work.note) + '</textarea>' +
+          '<span class="hint row-between"><span>Minimal 5 karakter.</span><span class="num" id="att-work-count">' + this.work.note.trim().length + '/500</span></span></label>' +
+        '<div class="work-total mt-3" id="att-work-total"></div>' +
+      '</div>';
+    this.renderWorkTotal();
+  },
+
+  selectedRates() {
+    const rates = (this.state && this.state.work && this.state.work.rates) || [];
+    return rates.filter(r => this.work.rateIds.indexOf(r.rateId) >= 0);
+  },
+
+  renderWorkTotal() {
+    const el = $('#att-work-total');
+    if (!el) return;
+    const sel = this.selectedRates();
+    const total = sel.reduce((s, r) => s + (Number(r.tarif) || 0), 0);
+    el.innerHTML = sel.length
+      ? '<span class="muted">Perkiraan bayaran hari ini</span><strong class="num">' + esc(Fmt.rupiah(total)) + '</strong><span class="small muted">' + sel.length + ' jobdesk · menunggu verifikasi HR</span>'
+      : '';
+    el.classList.toggle('hidden', !sel.length);
+  },
+
+  workReportOk() {
+    const rates = (this.state.work && this.state.work.rates) || [];
+    return this.work.note.trim().length >= 5 && (!rates.length || this.work.rateIds.length > 0);
+  },
+
+  /* ---------- Lokasi ---------- */
+  acquirePosition() {
+    return new Promise((resolve, reject) => {
+      if (!('geolocation' in navigator)) return reject(Object.assign(new Error('Perangkat atau browser Anda tidak mendukung layanan lokasi.'), { geo: 'UNSUPPORTED' }));
+      if (!window.isSecureContext) return reject(Object.assign(new Error('Lokasi hanya dapat diakses melalui koneksi aman (HTTPS).'), { geo: 'INSECURE' }));
+      const maxAcc = (this.state && this.state.rules && this.state.rules.gpsMaxAccuracy) || 50;
+      let best = null, attempts = 0;
+      const once = () => {
+        attempts++;
+        navigator.geolocation.getCurrentPosition(pos => {
+          const r = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy, at: performance.now() };
+          if (!best || r.accuracy < best.accuracy) best = r;
+          if (best.accuracy <= maxAcc || attempts >= 3) resolve(best);
+          else {
+            this.loc.message = 'Akurasi ±' + Math.round(r.accuracy) + ' m, mencari sinyal lebih baik (' + attempts + '/3)…';
+            this.renderReqs();
+            setTimeout(once, 1500);
+          }
+        }, err => {
+          if (best) return resolve(best);
+          reject(Object.assign(new Error(GEO_MESSAGES[err.code] || 'Lokasi tidak dapat dibaca.'), { geo: err.code }));
+        }, { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
+      };
+      once();
+    });
+  },
+
+  locate(force) {
+    if (!force && this.loc.promise) return this.loc.promise;
+    this.loc = { status: 'locating', reading: null, result: null, message: 'Mencari lokasi GPS…', promise: null };
+    this.renderReqs();
+    const p = this.acquirePosition()
+      .then(reading => {
+        if (!this.alive()) return;
+        this.loc.reading = reading;
+        this.loc.status = 'checking';
+        this.loc.message = 'Memverifikasi lokasi ke server…';
+        this.renderReqs();
+        return api('attendance.checkLocation', { lat: reading.lat, lng: reading.lng, accuracy: reading.accuracy }).then(res => {
+          this.loc.result = res;
+          this.loc.status = res.ok ? 'ok' : 'fail';
+          this.loc.message = res.message;
+        });
+      })
+      .catch(err => {
+        this.loc.status = 'fail';
+        this.loc.message = err.message;
+      })
+      .then(() => { this.loc.promise = null; if (this.alive()) this.renderReqs(); });
+    this.loc.promise = p;
+    return p;
+  },
+
+  /* ---------- Checklist ---------- */
+  reqs() {
+    const st = this.state;
+    const cam = this.cam.status;
+    const L = this.loc;
+    const res = L.result;
+    const work = this.needsWork();
+    const selfie = this.photos.selfie;
+    const out = [];
+    out.push({ key: 'account', title: 'Akun terverifikasi', state: 'ok', text: st.employee.nama + ' · ' + st.employee.employeeId });
+    if (this.cam.mode === 'upload') {
+      out.push({
+        key: 'camera', title: 'Kamera siap',
+        state: this.uploadAllowed() ? 'ok' : 'fail',
+        text: this.uploadAllowed() ? 'Memakai kamera HP; jam & lokasi dicap otomatis' : 'Foto dari kamera HP dinonaktifkan Admin',
+      });
+    } else {
+      out.push({
+        key: 'camera', title: 'Kamera aktif',
+        state: selfie || cam === 'live' ? 'ok' : cam === 'starting' ? 'wait' : cam === 'error' ? 'fail' : 'idle',
+        text: selfie ? 'Foto diambil dari kamera aktif' : cam === 'live' ? 'Kamera menyala' : cam === 'starting' ? 'Meminta izin kamera…' : cam === 'error' ? this.cam.error.title : 'Kamera belum aktif',
+      });
+    }
+    out.push({
+      key: 'photo', title: 'Foto berhasil diambil',
+      state: selfie ? 'ok' : 'idle',
+      text: selfie ? 'Selfie diambil pukul ' + Clock.timeStr(selfie.takenAt) + ' ' + Clock.abbr() : this.cam.mode === 'upload' ? 'Tekan "Buka kamera" untuk mengambil selfie' : 'Tekan tombol kamera untuk mengambil selfie',
+    });
+    if (work) {
+      const wp = this.photos.work;
+      out.push({ key: 'workPhoto', title: 'Foto hasil kerja diambil', state: wp ? 'ok' : 'idle', text: wp ? 'Diambil pukul ' + Clock.timeStr(wp.takenAt) + ' ' + Clock.abbr() : 'Foto hasil pekerjaan hari ini melalui kamera' });
+      const sel = this.selectedRates();
+      const rates = st.work.rates || [];
+      out.push({
+        key: 'workReport', title: 'Laporan jobdesk diisi', state: this.workReportOk() ? 'ok' : 'idle',
+        text: this.workReportOk() ? (sel.length ? sel.length + ' jobdesk · ' + Fmt.rupiah(sel.reduce((s, r) => s + (Number(r.tarif) || 0), 0)) : 'Keterangan pekerjaan terisi')
+          : rates.length && !sel.length ? 'Pilih jobdesk yang dikerjakan dan tulis keterangannya' : 'Tuliskan pekerjaan yang Anda kerjakan',
+      });
+    }
+    out.push({
+      key: 'location', title: 'Lokasi berhasil diverifikasi',
+      state: L.status === 'ok' ? 'ok' : L.status === 'fail' ? 'fail' : L.status === 'idle' ? 'idle' : 'wait',
+      text: L.status === 'ok' ? Fmt.dist(res.distance) + ' dari ' + res.locationName + ' · akurasi ±' + Math.round(res.accuracy) + ' m · terkunci' : L.message || 'Menunggu izin lokasi',
+      action: L.status === 'ok' || L.status === 'fail' ? '<button class="btn btn-sm btn-outline" data-loc="retry">' + icon('refresh', 'ic-sm') + (L.status === 'fail' ? 'Coba lagi' : 'Perbarui') + '</button>' : '',
+    });
+    const synced = Clock.synced();
+    out.push({
+      key: 'clock', title: 'Jam server tersinkronisasi',
+      state: synced ? 'ok' : Clock.base ? 'fail' : 'wait',
+      text: synced ? 'Selisih jaringan ' + Math.max(1, Math.round(Clock.rtt / 2)) + ' ms · ' + Clock.abbr() : Clock.base ? 'Belum tersinkron ulang, periksa koneksi' : 'Menyinkronkan dengan server…',
+    });
+    out.push({
+      key: 'rules', title: 'Status absensi memenuhi aturan',
+      state: st.ok ? 'ok' : 'fail',
+      text: st.mode === 'done' ? 'Absensi hari ini sudah lengkap' : st.message,
+    });
+    return out;
+  },
+
+  allOk() {
+    if (!this.state || !this.actionable() || this.submitting) return false;
+    return this.reqs().every(r => r.state === 'ok');
+  },
+
+  /** Baris lokasi di bawah foto: hanya ditampilkan, diisi dari hasil GPS yang divalidasi server. */
+  renderLock() {
+    const lock = $('#att-lock');
+    if (!lock) return;
+    const res = this.loc.result;
+    lock.innerHTML = this.actionable() ? icon('pin', 'ic-sm') + '<span>' + (this.loc.status === 'ok' && res
+      ? 'Lokasi terkunci: <strong>' + esc(res.locationName) + '</strong> · ' + esc(Fmt.dist(res.distance)) + ' dari kantor. Diambil otomatis dari GPS dan tidak dapat diubah.'
+      : 'Lokasi diambil otomatis dari GPS dan dicap pada foto saat dikirim.') + '</span>' : '';
+    lock.classList.toggle('hidden', !lock.innerHTML);
+  },
+
+  renderReqs() {
+    const ul = $('#att-reqs');
+    if (!ul || !this.state) return;
+    this.renderLock();
+    const icons = { ok: 'check', fail: 'x', wait: null, idle: null };
+    const list = this.reqs();
+    ul.innerHTML = list.map((r, i) => '<li class="req is-' + r.state + '" data-req="' + r.key + '">' +
+      '<span class="req-icon">' + (r.state === 'wait' ? '<span class="spinner" style="width:12px;height:12px"></span>' : icons[r.state] ? icon(icons[r.state]) : '<span class="small strong">' + (i + 1) + '</span>') + '</span>' +
+      '<div class="grow"><div class="req-title">' + esc(r.title) + '</div><div class="req-text">' + esc(r.text) + '</div></div>' +
+      (r.action ? '<div class="req-action">' + r.action + '</div>' : '') + '</li>').join('');
+    const ok = this.allOk();
+    $('#att-submit').disabled = !ok;
+    const pending = { account: 'akun', camera: 'kamera aktif', photo: 'foto selfie', workPhoto: 'foto hasil kerja', workReport: 'laporan jobdesk', location: 'verifikasi lokasi', clock: 'sinkronisasi jam', rules: 'aturan jadwal' };
+    const missing = list.filter(r => r.state !== 'ok').map(r => pending[r.key]);
+    $('#att-note').textContent = this.mode === 'done' ? 'Terima kasih, absensi hari ini sudah tercatat.'
+      : !this.state.ok ? 'Absensi belum dapat dilakukan saat ini.'
+        : ok ? 'Semua persyaratan terpenuhi. Waktu resmi ditentukan server saat data diterima.'
+          : 'Belum terpenuhi: ' + missing.join(', ') + '.';
+    this.renderSync();
+  },
+
+  /* ---------- Kirim ---------- */
+  async onSubmit() {
+    if (!this.allOk()) return;
+    const btn = $('#att-submit');
+    const shots = this.needsWork() ? ['selfie', 'work'] : ['selfie'];
+    const stale = !this.nonce || performance.now() > this.nonce.exp || shots.some(k => !this.photos[k] || this.photos[k].nonce !== this.nonce.value);
+    if (stale) {
+      UI.toast('Sesi foto sudah kedaluwarsa (lebih dari 10 menit). Silakan ambil ulang foto.', 'warning');
+      this.nonce = null;
+      this.photos = { selfie: null, work: null };
+      return this.retake('selfie');
+    }
+    UI.busy(btn, true, 'Memeriksa…');
+    try {
+      if (!this.loc.reading || performance.now() - this.loc.reading.at > 120000) {
+        await this.locate(true);
+        if (this.loc.status !== 'ok') { UI.toast(this.loc.message, 'danger'); return; }
+      }
+      const st = await api('attendance.state');
+      if (!this.alive()) return;
+      if (st.mode !== this.mode || !st.ok) { this.applyState(st); UI.toast(st.message, 'warning'); return; }
+      this.state = st;
+    } catch (err) {
+      UI.toast(err.message, 'danger');
+      return;
+    } finally {
+      UI.busy(btn, false);
+      this.renderReqs();
+    }
+    this.confirmDialog();
+  },
+
+  confirmDialog() {
+    const st = this.state;
+    this.finals = { selfie: this.finalPhoto('selfie'), work: this.needsWork() ? this.finalPhoto('work') : null };
+    const res = this.loc.result;
+    const rd = this.loc.reading;
+    const isOut = this.mode === 'checkout';
+    const work = this.needsWork();
+    const sel = this.selectedRates();
+    const preview = isOut ? UI.badge('Check-out', 'success') : UI.badge('Hadir');
+    const m = UI.modal({
+      title: isOut ? 'Konfirmasi check-out' : 'Konfirmasi check-in',
+      body:
+        '<div class="receipt-row">' +
+          '<div class="row" style="gap:8px;align-items:flex-start">' +
+            '<img class="receipt-photo" src="' + this.finals.selfie + '" alt="Foto selfie">' +
+            (work ? '<img class="receipt-photo" src="' + this.finals.work + '" alt="Foto hasil kerja">' : '') +
+          '</div>' +
+          '<dl class="kv grow" style="grid-template-columns:110px minmax(0,1fr)">' +
+            '<dt>Jenis</dt><dd>' + (isOut ? 'Check-out (pulang)' : 'Check-in (masuk)') + '</dd>' +
+            '<dt>Jam server</dt><dd class="num"><span data-live>' + esc(Clock.timeStr(Clock.now())) + '</span> ' + esc(Clock.abbr()) + '</dd>' +
+            '<dt>Tanggal</dt><dd>' + esc(st.workDateLabel) + '</dd>' +
+            '<dt>Lokasi</dt><dd>' + esc(res.locationName) + ' · ' + esc(Fmt.dist(res.distance)) + '</dd>' +
+            '<dt>Akurasi GPS</dt><dd>±' + Math.round(res.accuracy) + ' m</dd>' +
+            '<dt>Status</dt><dd>' + preview + '</dd>' +
+          '</dl>' +
+        '</div>' +
+        (work ? '<div class="divider"></div><div class="form-section" style="margin-bottom:8px">Laporan jobdesk</div>' +
+          (sel.length ? '<ul class="people-list" style="margin:0">' + sel.map(r => '<li><span>' + esc(r.nama) + '</span><span class="num strong">' + esc(Fmt.rupiah(r.tarif)) + '</span></li>').join('') +
+            '<li><span class="strong">Perkiraan total</span><span class="num strong">' + esc(Fmt.rupiah(sel.reduce((s, r) => s + (Number(r.tarif) || 0), 0))) + '</span></li></ul>' : '') +
+          '<p class="small mt-2"><span class="muted">Keterangan:</span> ' + esc(this.work.note.trim()) + '</p>' +
+          '<p class="small muted mt-1">Bayaran dihitung setelah laporan diverifikasi HR.</p>' : '') +
+        '<details class="mt-4 small muted"><summary style="cursor:pointer">Detail teknis</summary><div class="mt-2">Koordinat perangkat: ' +
+          esc(rd.lat.toFixed(5)) + ', ' + esc(rd.lng.toFixed(5)) + '<br>ID sesi foto: ' + esc(this.photos.selfie.nonce.slice(0, 8)) +
+          '<br>Waktu resmi, jarak, status, dan tarif ditetapkan ulang oleh server saat data diterima.</div></details>' +
+        '<label class="field mt-4"><span class="label">Catatan absensi (opsional)</span><textarea class="textarea" name="note" maxlength="200" placeholder="Contoh: lembur, kunjungan klien" style="min-height:64px"></textarea></label>' +
+        '<div data-err class="mt-3"></div>',
+      foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-accent" data-confirm>' + icon(isOut ? 'logout' : 'login') + (isOut ? 'Konfirmasi check-out' : 'Konfirmasi check-in') + '</button>',
+      dismissible: true,
+    });
+    const live = setInterval(() => { const el = $('[data-live]', m.el); if (el) el.textContent = Clock.timeStr(Clock.now()); else clearInterval(live); }, 500);
+    $('[data-confirm]', m.el).addEventListener('click', () => this.submit(m, live));
+  },
+
+  async submit(m, live) {
+    if (this.submitting) return;
+    this.submitting = true;
+    const btn = $('[data-confirm]', m.el);
+    const cancel = $('.dialog-foot [data-close]', m.el);
+    UI.busy(btn, true, 'Menyimpan absensi…');
+    if (cancel) cancel.disabled = true;
+    $('[data-err]', m.el).innerHTML = UI.callout('info', 'Mengirim foto dan memverifikasi data di server. Jangan tutup halaman ini.');
+    const rd = this.loc.reading;
+    const work = this.needsWork();
+    const payload = {
+      action: this.mode,
+      nonce: this.photos.selfie.nonce,
+      photo: this.finals.selfie,
+      photoSource: this.photos.selfie.source,
+      photoOrigHash: this.photos.selfie.origHash,
+      photoAgeSec: this.photos.selfie.ageSec,
+      lat: rd.lat,
+      lng: rd.lng,
+      accuracy: rd.accuracy,
+      faceCheck: this.photos.selfie.faceCheck,
+      note: ($('[name=note]', m.el).value || '').trim(),
+    };
+    if (work) {
+      payload.workPhoto = this.finals.work;
+      payload.workPhotoSource = this.photos.work.source;
+      payload.workPhotoOrigHash = this.photos.work.origHash;
+      payload.workPhotoAgeSec = this.photos.work.ageSec;
+      payload.workRateIds = this.work.rateIds.slice();
+      payload.workNote = this.work.note.trim();
+    }
+    try {
+      const r = await api('attendance.submit', payload);
+      clearInterval(live);
+      const photos = { selfie: this.finals.selfie, work: work ? this.finals.work : null };
+      this.photos = { selfie: null, work: null };
+      this.target = 'selfie';
+      this.work = { rateIds: [], note: '' };
+      this.nonce = null;
+      this.submitting = false;
+      m.close();
+      this.showReceipt(r, photos);
+      if (this.alive()) {
+        this.loc = { status: 'idle', reading: null, result: null, message: '', promise: null };
+        this.refreshState();
+        this.loadHistory();
+      }
+      App.refreshNotif();
+    } catch (err) {
+      this.submitting = false;
+      UI.busy(btn, false);
+      if (cancel) cancel.disabled = false;
+      $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(err.message));
+      const code = err.code;
+      if (code === 'NONCE_INVALID' || code === 'DUPLICATE_PHOTO' || code === 'PHOTO_INVALID' || code === 'PHOTO_REQUIRED') {
+        btn.disabled = true;
+        this.nonce = null;
+        setTimeout(() => { clearInterval(live); m.close(); this.photos = { selfie: null, work: null }; this.retake('selfie'); }, 2200);
+      } else if (code === 'WORK_PHOTO_INVALID') {
+        btn.disabled = true;
+        setTimeout(() => { clearInterval(live); m.close(); this.retake('work'); }, 2200);
+      } else if (code === 'WORK_NOTE_REQUIRED' || code === 'WORK_ITEMS_REQUIRED' || code === 'WORK_ITEM_INVALID') {
+        btn.disabled = true;
+        setTimeout(() => {
+          clearInterval(live); m.close();
+          if (code === 'WORK_ITEM_INVALID') this.refreshState();
+          const box = $('#att-work');
+          if (box) { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); const ta = $('#att-work-note'); if (ta) ta.focus(); }
+        }, 1800);
+      } else if (['OUTSIDE_RADIUS', 'ACCURACY_LOW', 'LOCATION_REQUIRED', 'LOCATION_INVALID', 'NO_OFFICE'].indexOf(code) >= 0) {
+        btn.disabled = true;
+        this.loc.status = 'fail';
+        this.loc.message = err.message;
+        this.renderReqs();
+      } else if (code === 'NETWORK') {
+        $('[data-err]', m.el).innerHTML = UI.callout('danger', 'Koneksi terputus saat mengirim. Status absensi Anda akan diperiksa ulang secara otomatis.');
+        this.refreshState();
+      } else if (code !== 'RATE_LIMIT' && code !== 'BUSY') {
+        btn.disabled = true;
+        this.refreshState();
+      }
+    }
+  },
+
+  showReceipt(r, photos) {
+    const isOut = r.action === 'checkout';
+    const status = isOut ? UI.badge('Check-out', 'success') + (r.workMinutes ? ' <span class="small muted">durasi ' + Fmt.minutes(r.workMinutes) + '</span>' : '')
+      : UI.badge(r.status);
+    UI.modal({
+      title: 'Bukti ' + (isOut ? 'check-out' : 'check-in'),
+      body:
+        '<div style="text-align:center"><div class="receipt-check" style="margin:0 auto">' + icon('check') + '</div>' +
+          '<h3 class="mt-3" style="font-size:18px">' + (isOut ? 'Check-out berhasil' : 'Check-in berhasil') + '</h3>' +
+          '<p class="muted">' + esc(r.workDateLabel) + '</p></div>' +
+        '<div class="receipt-row mt-6">' +
+          '<div class="row" style="gap:8px;align-items:flex-start"><img class="receipt-photo" src="' + photos.selfie + '" alt="Foto absensi">' +
+            (photos.work ? '<img class="receipt-photo" src="' + photos.work + '" alt="Foto hasil kerja">' : '') + '</div>' +
+          '<dl class="kv grow" style="grid-template-columns:110px minmax(0,1fr)">' +
+            '<dt>Jam resmi</dt><dd class="num" style="font-size:18px;font-weight:700">' + esc(r.serverTime.local) + ' <span class="muted small">' + esc(Clock.abbr()) + '</span></dd>' +
+            '<dt>Status</dt><dd>' + status + '</dd>' +
+            (isOut ? '<dt>Durasi kerja</dt><dd>' + esc(Fmt.minutes(r.workMinutes)) + '</dd>' : '') +
+            '<dt>Lokasi</dt><dd>' + esc(r.location.nama) + '</dd>' +
+            '<dt>Jarak</dt><dd>' + esc(Fmt.dist(r.location.distance)) + ' (radius ' + esc(r.location.radius) + ' m)</dd>' +
+            '<dt>Akurasi GPS</dt><dd>±' + Math.round(r.location.accuracy) + ' m</dd>' +
+            (r.work ? '<dt>Jobdesk</dt><dd>' + esc(r.work.items.map(i => i.nama).join(', ')) + '<div class="small muted">' + esc(Fmt.rupiah(r.work.total)) + ' · menunggu verifikasi HR</div></dd>' : '') +
+            '<dt>ID transaksi</dt><dd class="small num">' + esc(r.attendanceId) + '</dd>' +
+          '</dl>' +
+        '</div>',
+      foot: '<button class="btn btn-primary" data-close>Selesai</button>',
+    });
+  },
+
+  async loadHistory() {
+    const box = $('#att-history');
+    if (!box) return;
+    try {
+      const res = await api('attendance.history', { days: 31 });
+      if (!this.alive()) return;
+      box.innerHTML = renderHistoryList(res.records);
+    } catch (err) {
+      if (this.alive()) box.innerHTML = UI.callout('danger', esc(err.message));
+    }
+  },
+};
+
+function renderHistoryList(records) {
+  if (!records.length) return UI.empty('history', 'Belum ada riwayat absensi', 'Riwayat akan muncul setelah Anda melakukan check-in.');
+  return records.map(r => {
+    const p = r.workDate.split('-').map(Number);
+    return '<div class="history-item">' +
+      '<div class="history-date"><div class="d num">' + p[2] + '</div><div class="m">' + BLN[p[1] - 1] + '</div></div>' +
+      '<div class="grow"><div class="row wrap" style="gap:6px"><span class="strong">' + esc(Fmt.dayShort(r.workDate)) + '</span>' + UI.badge(r.status) + '</div>' +
+        '<div class="history-times mt-1"><span><span class="k">Masuk</span>' + esc(Fmt.time(r.checkIn)) + '</span><span><span class="k">Pulang</span>' + esc(Fmt.time(r.checkOut)) + '</span>' +
+        '<span><span class="k">Durasi</span>' + (r.workMinutes ? esc(Fmt.minutes(r.workMinutes)) : '–') + '</span></div></div>' +
+      '</div>';
+  }).join('');
+}
+
+Pages.absensi = {
+  title: 'Absensi',
+  render(view, param, gen) { return Att.mount(view, param, gen); },
+  destroy() { Att.unmount(); },
+};
+</script>

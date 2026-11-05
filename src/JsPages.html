@@ -1,0 +1,815 @@
+<script>
+'use strict';
+/* =========================================================================
+ * Halaman: Dashboard, Karyawan, Profil, Jobdesk, Izin & Cuti, Laporan,
+ * serta komponen Monitoring Absensi Tim (dipakai di Absensi & Laporan).
+ * ========================================================================= */
+
+/* ---------- Grafik garis kehadiran 7 hari (SVG, satu seri) ---------- */
+function niceMax(v) {
+  if (v <= 4) return 4;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  const steps = [1, 2, 2.5, 5, 10];
+  for (let i = 0; i < steps.length; i++) if (steps[i] * pow >= v) return steps[i] * pow;
+  return 10 * pow;
+}
+
+function AttendanceChart(el, data) {
+  const tip = h('<div class="chart-tip" role="presentation"></div>');
+  const svgBox = h('<div></div>');
+  const table = h('<div class="mt-3 hidden"></div>');
+  const toggle = h('<button class="link-btn small mt-2">' + 'Tampilkan sebagai tabel' + '</button>');
+  el.innerHTML = '';
+  el.classList.add('chart');
+  el.appendChild(svgBox); el.appendChild(tip); el.appendChild(toggle); el.appendChild(table);
+  table.innerHTML = '<div class="table-wrap"><table class="table"><thead><tr><th>Tanggal</th><th class="right">Hadir</th></tr></thead><tbody>' +
+    data.map(d => '<tr><td>' + esc(Fmt.dateLong(d.date)) + '</td><td class="right num">' + d.hadir + '</td></tr>').join('') + '</tbody></table></div>';
+  toggle.addEventListener('click', () => {
+    const hidden = table.classList.toggle('hidden');
+    toggle.textContent = hidden ? 'Tampilkan sebagai tabel' : 'Sembunyikan tabel';
+  });
+
+  function draw() {
+    const W = Math.max(280, el.clientWidth || 600);
+    const H = 240;
+    const m = { t: 18, r: 56, b: 30, l: 34 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const maxV = niceMax(Math.max.apply(null, data.map(d => d.hadir)));
+    const step = maxV / 4;
+    const n = data.length;
+    const x = i => m.l + (n === 1 ? iw / 2 : i * iw / (n - 1));
+    const y = v => m.t + ih - (v / maxV) * ih;
+    let s = '<svg viewBox="0 0 ' + W + ' ' + H + '" height="' + H + '" role="img" aria-label="Grafik jumlah karyawan hadir tujuh hari terakhir">';
+    for (let t = 0; t <= maxV + 1e-9; t += step) {
+      const yy = Math.round(y(t)) + 0.5;
+      s += '<line x1="' + m.l + '" x2="' + (W - m.r) + '" y1="' + yy + '" y2="' + yy + '" stroke="var(--grid)" stroke-width="1"/>';
+      s += '<text x="' + (m.l - 8) + '" y="' + yy + '" text-anchor="end" dominant-baseline="middle" font-size="11.5" fill="var(--muted)">' + (Math.round(t * 10) / 10) + '</text>';
+    }
+    const every = W < 420 ? 2 : 1;
+    data.forEach((d, i) => {
+      if (i % every && i !== n - 1) return;
+      const p = d.date.split('-').map(Number);
+      s += '<text x="' + x(i) + '" y="' + (H - 8) + '" text-anchor="middle" font-size="11.5" fill="var(--muted)">' + p[2] + ' ' + BLN[p[1] - 1] + '</text>';
+    });
+    const pts = data.map((d, i) => [x(i), y(d.hadir)]);
+    const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
+    const area = line + ' L' + pts[n - 1][0].toFixed(1) + ' ' + y(0) + ' L' + pts[0][0].toFixed(1) + ' ' + y(0) + ' Z';
+    s += '<path d="' + area + '" fill="var(--primary)" fill-opacity="0.1"/>';
+    s += '<path d="' + line + '" fill="none" stroke="var(--primary)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    s += '<line data-cross x1="0" x2="0" y1="' + m.t + '" y2="' + (m.t + ih) + '" stroke="var(--border-strong)" stroke-width="1" visibility="hidden"/>';
+    pts.forEach((p, i) => { s += '<circle data-dot="' + i + '" cx="' + p[0] + '" cy="' + p[1] + '" r="4" fill="var(--primary)" stroke="var(--surface)" stroke-width="2"/>'; });
+    const last = pts[n - 1];
+    s += '<text x="' + (last[0] + 10) + '" y="' + last[1] + '" dominant-baseline="middle" font-size="12" font-weight="600" fill="var(--text-2)">' + data[n - 1].hadir + ' hadir</text>';
+    const band = n === 1 ? iw : iw / (n - 1);
+    pts.forEach((p, i) => { s += '<rect data-hit="' + i + '" x="' + (p[0] - band / 2) + '" y="' + m.t + '" width="' + band + '" height="' + ih + '" fill="transparent"/>'; });
+    s += '</svg>';
+    svgBox.innerHTML = s;
+
+    const svg = $('svg', svgBox);
+    const cross = $('[data-cross]', svg);
+    const show = i => {
+      const d = data[i], p = pts[i];
+      cross.setAttribute('x1', p[0]); cross.setAttribute('x2', p[0]); cross.setAttribute('visibility', 'visible');
+      $$('[data-dot]', svg).forEach(c => c.setAttribute('r', c.dataset.dot === String(i) ? 5.5 : 4));
+      tip.innerHTML = '<div class="tip-title">' + esc(Fmt.dateLong(d.date)) + '</div><div class="tip-row"><span class="key"></span>Hadir <strong class="num">' + d.hadir + '</strong></div>';
+      const scale = svg.getBoundingClientRect().width / W;
+      tip.style.left = (p[0] * scale) + 'px';
+      tip.style.top = (p[1] * scale) + 'px';
+      tip.classList.add('show');
+    };
+    const hide = () => { cross.setAttribute('visibility', 'hidden'); tip.classList.remove('show'); $$('[data-dot]', svg).forEach(c => c.setAttribute('r', 4)); };
+    $$('[data-hit]', svg).forEach(r => {
+      r.addEventListener('mouseenter', () => show(Number(r.dataset.hit)));
+      r.addEventListener('touchstart', () => show(Number(r.dataset.hit)), { passive: true });
+    });
+    svg.addEventListener('mouseleave', hide);
+  }
+  draw();
+  if (window.ResizeObserver) {
+    let lastW = el.clientWidth;
+    const ro = new ResizeObserver(debounce(() => { if (!document.body.contains(el)) { ro.disconnect(); return; } if (el.clientWidth !== lastW) { lastW = el.clientWidth; draw(); } }, 120));
+    ro.observe(el);
+  }
+}
+
+/* ---------- Dashboard ---------- */
+/* Disusun di sekitar keputusan harian HR: siapa yang belum hadir dan perlu dicek.
+   Angka besar = titik fokus; rincian & daftar nama mendukungnya. */
+function teamFocus(t) {
+  if (!t.totalKaryawan) {
+    return '<div class="card"><div class="card-body">' + UI.empty('users', 'Belum ada karyawan aktif', 'Tambahkan karyawan di menu Karyawan agar kehadiran harian tampil di sini.') +
+      '<div class="center"><a class="btn btn-primary" href="#/karyawan">' + icon('plus') + 'Tambah karyawan</a></div></div></div>';
+  }
+  const more = t.notPresentTotal - t.notPresent.length;
+  return '<div class="card focus-card">' +
+    '<div class="focus-main">' +
+      '<div class="card-title">Kehadiran hari ini</div>' +
+      '<div class="focus-big mt-3">' + t.hadir + '<span class="of"> / ' + t.totalKaryawan + '</span></div>' +
+      '<div class="focus-caption">' + t.hadir + ' dari ' + t.totalKaryawan + ' karyawan aktif sudah check-in.</div>' +
+      '<div class="breakdown">' +
+        '<div><div class="k">Izin / cuti</div><div class="v">' + t.izin + '</div></div>' +
+        '<div><div class="k">Belum absen</div><div class="v">' + t.belumAbsen + '</div></div>' +
+      '</div>' +
+      (t.newThisMonth ? '<p class="small muted mt-4">' + t.newThisMonth + ' karyawan bergabung bulan ini.</p>' : '') +
+    '</div>' +
+    '<div class="focus-side">' +
+      '<div class="row-between"><div><div class="card-title">Belum hadir</div><div class="card-sub">Karyawan aktif yang belum check-in dan tidak izin hari ini</div></div></div>' +
+      (t.notPresent.length
+        ? '<ul class="people-list">' + t.notPresent.map(p => '<li>' + UI.person(p.nama, p.departemen || 'Tanpa departemen') + UI.badge(p.status, 'warning') + '</li>').join('') + '</ul>' +
+          (more > 0 ? '<p class="small mt-2">' + more + ' karyawan lainnya. <a href="#/absensi/tim">Buka monitoring tim</a></p>' : '')
+        : '<p class="mt-3 muted">Semua karyawan aktif sudah check-in atau sedang izin hari ini.</p>') +
+    '</div>' +
+  '</div>';
+}
+
+function todayCard(p) {
+  const r = p.record;
+  const label = p.ok && p.mode === 'checkin' ? 'Check-in sekarang' : p.ok && p.mode === 'checkout' ? 'Check-out sekarang' : 'Buka absensi';
+  return '<div class="card" style="margin-bottom:16px"><div class="card-body row-between wrap" style="gap:16px">' +
+    '<div class="row" style="gap:14px"><div class="stat-icon tone-gold">' + icon('scan') + '</div><div><div class="card-title">Absensi saya hari ini</div>' +
+      '<div class="card-sub">Jam bebas · check-in & check-out kapan saja</div></div></div>' +
+    '<div class="row wrap" style="gap:24px">' +
+      '<div><div class="small muted">Masuk</div><div class="strong num">' + esc(r && r.checkIn ? r.checkIn.slice(0, 5) : '–') + '</div></div>' +
+      '<div><div class="small muted">Pulang</div><div class="strong num">' + esc(r && r.checkOut ? r.checkOut.slice(0, 5) : '–') + '</div></div>' +
+      '<div><div class="small muted">Status</div><div>' + (r ? UI.badge(r.status) : '<span class="faint">Belum absen</span>') + '</div></div>' +
+      '<a class="btn ' + (p.ok ? 'btn-accent' : 'btn-outline') + '" href="#/absensi">' + icon(p.mode === 'checkout' ? 'logout' : 'scan') + esc(label) + '</a>' +
+    '</div></div>' +
+    (!p.ok && p.mode !== 'done' ? '<div style="padding:0 18px 16px">' + UI.callout('neutral', esc(p.message)) + '</div>' : '') + '</div>';
+}
+
+Pages.dashboard = {
+  async render(view, param, gen) {
+    const d = await api.swr('dashboard.summary');
+    if (!App.alive(gen)) return;
+    const u = App.user;
+    let html = '<div class="page-head"><div><h1 class="page-title">Dashboard</h1><p class="page-sub">Selamat datang, ' + esc(u.nama) + ' · ' + esc(d.todayLabel) + '</p></div>' +
+      '</div>';
+    if (d.personal) html += todayCard(d.personal);
+    if (d.team) {
+      const t = d.team;
+      html += teamFocus(t);
+      if (t.pendingLeaves) {
+        html += '<div class="mt-4">' + UI.callout('warning', '<strong>' + t.pendingLeaves + ' pengajuan izin/cuti</strong> menunggu persetujuan Anda. <a href="#/izin/persetujuan">Tinjau pengajuan</a>') + '</div>';
+      }
+      if (t.pendingReports) {
+        html += '<div class="mt-4">' + UI.callout('warning', '<strong>' + t.pendingReports + ' laporan jobdesk</strong> menunggu verifikasi sebelum dihitung ke gaji. <a href="#/gaji/verifikasi">Verifikasi laporan</a>') + '</div>';
+      }
+      if (t.pendingBonus) {
+        html += '<div class="mt-4">' + UI.callout('warning', '<strong>' + t.pendingBonus + ' laporan bonus penjualan</strong> menunggu verifikasi. <a href="#/gaji/bonus">Verifikasi bonus</a>') + '</div>';
+      }
+      html += '<div class="grid grid-main mt-4">' +
+        '<div class="card"><div class="card-head"><div><div class="card-title">Berapa karyawan hadir dalam 7 hari terakhir?</div><div class="card-sub">Jumlah karyawan yang check-in per hari</div></div></div><div class="card-body"><div id="dash-chart"></div></div></div>' +
+        '<div class="card"><div class="card-head"><div class="card-title">Aktivitas terbaru</div></div><div class="card-body">' +
+          (t.activity.length ? '<ul class="activity">' + t.activity.map(a => '<li><span class="mark mark-' + esc(a.type) + '"></span><div><div><strong>' + esc(a.nama) + '</strong> ' + esc(a.text) + '</div><div class="small muted num">' + esc(a.time) + '</div></div></li>').join('') + '</ul>'
+            : UI.empty('history', 'Belum ada aktivitas minggu ini', 'Check-in, check-out, dan pengajuan izin karyawan akan muncul di sini.')) +
+        '</div></div></div>';
+    } else if (d.personal) {
+      const r = d.personal.recap;
+      html += '<div class="card"><div class="card-head"><div><div class="card-title">Ringkasan bulan ini</div><div class="card-sub">Dihitung sampai hari ini</div></div></div><div class="card-body"><div class="summary-line">' +
+        '<div><div class="k">Hadir</div><div class="v">' + (r.hadir + r.dinasLuar) + ' <span class="small muted">hari</span></div></div>' +
+        '<div><div class="k">Total jam kerja</div><div class="v">' + esc(Fmt.minutes(r.menitKerja) || '0 menit') + '</div></div>' +
+        '<div><div class="k">Izin / sakit / cuti</div><div class="v">' + (r.izin + r.sakit + r.cuti) + '</div></div>' +
+        '<div><div class="k">Tanpa check-out</div><div class="v">' + r.tidakCheckout + '</div></div>' +
+        '</div>' + (d.personal.pendingLeaves ? '<p class="small muted mt-3">' + d.personal.pendingLeaves + ' pengajuan izin masih menunggu persetujuan.</p>' : '') + '</div></div>';
+      const jobs = d.personal.jobs;
+      html += '<div class="card mt-4"><div class="card-head"><div><div class="card-title">Jobdesk aktif</div><div class="card-sub">' + d.personal.activeJobs + ' tugas belum selesai</div></div><a class="btn btn-sm btn-outline" href="#/jobdesk">Lihat semua</a></div><div class="card-body">' +
+        (jobs.length ? '<ul class="activity">' + jobs.map(j => '<li><span class="mark mark-' + (j.status === 'In Progress' ? 'leave' : 'job') + '"></span><div class="grow"><div class="row-between"><strong>' + esc(j.judul) + '</strong>' + UI.badge(j.status) + '</div>' +
+          '<div class="small muted">' + (j.deadline ? 'Deadline ' + esc(Fmt.date(j.deadline)) : 'Tanpa deadline') + '</div></div></li>').join('') + '</ul>'
+          : UI.empty('clipboard', 'Tidak ada jobdesk aktif', '')) + '</div></div>';
+    } else {
+      html += UI.callout('info', 'Akun Anda belum terhubung dengan data karyawan.');
+    }
+    view.innerHTML = html;
+    const chart = $('#dash-chart', view);
+    if (chart && d.team) AttendanceChart(chart, d.team.chart);
+  },
+};
+
+/* ---------- Karyawan ---------- */
+let META_CACHE = null;
+async function metaOptions(force) {
+  if (!META_CACHE || force) META_CACHE = await (force ? api('meta.options') : api.swr('meta.options'));
+  return META_CACHE;
+}
+
+/** Data halaman yang diambil di belakang setelah login. Payload harus sama persis dengan yang dipakai halaman. */
+function prefetchPlan(u, today) {
+  const hr = u.role === 'admin' || u.role === 'hr';
+  const month = today.slice(0, 8) + '01';
+  const out = [{ action: 'dashboard.summary' }, { action: 'jobs.list' }];
+  if (u.employeeId) out.push({ action: 'attendance.state', payload: { withHistory: true } });
+  if (u.employeeId) {
+    out.push({ action: 'leave.list', payload: { scope: 'mine' } },
+      { action: 'work.list', payload: { from: month, to: today, mine: true } },
+      { action: 'employees.get', payload: { employeeId: u.employeeId } },
+      { action: 'attendance.history', payload: { employeeId: u.employeeId, days: 31 } });
+  }
+  if (u.hasBonus) out.push({ action: 'bonus.form' }, { action: 'bonus.list', payload: { from: month, to: today, mine: true } });
+  if (hr) {
+    const week = { from: dateAdd(today, -6), to: today, status: 'Menunggu', departemen: '' };
+    out.push({ action: 'meta.options' }, { action: 'employees.list' },
+      { action: 'work.list', payload: week }, { action: 'bonus.list', payload: week }, { action: 'bonus.schemes' },
+      { action: 'leave.list', payload: { scope: 'approvals', status: 'Menunggu' } },
+      { action: 'payroll.summary', payload: { from: month, to: today, departemen: '' } });
+  }
+  return out;
+}
+
+function employeeForm(emp, meta, onSaved) {
+  const isNew = !emp;
+  const e = emp || { status: 'Aktif' };
+  const isAdmin = App.user.role === 'admin';
+  const locIds = String(e.locationIds || '').split(',').filter(Boolean);
+  const canAccount = isNew || !e.username;
+  const deptList = '<datalist id="dept-list">' + meta.departments.map(d => '<option value="' + esc(d) + '">').join('') + '</datalist>';
+  const locChips = meta.locations.length
+    ? '<div class="chips">' + meta.locations.map(l => '<label class="chip' + (locIds.indexOf(l.locationId) >= 0 ? ' is-on' : '') + '"><input type="checkbox" name="locationIds" data-multi="1" value="' + esc(l.locationId) + '"' + (locIds.indexOf(l.locationId) >= 0 ? ' checked' : '') + '>' + esc(l.nama) + '</label>').join('') + '</div>'
+    : '<div class="hint">Belum ada lokasi kerja. Admin dapat menambahkannya di Pengaturan.</div>';
+  const m = UI.modal({
+    title: isNew ? 'Tambah karyawan' : 'Edit data karyawan',
+    size: 'lg',
+    body: '<form class="form-grid" novalidate>' + deptList +
+      '<label class="field span-2"><span class="label">Nama lengkap <span class="req-mark">*</span></span><input class="input" name="nama" maxlength="80" value="' + esc(e.nama) + '" required></label>' +
+      '<label class="field"><span class="label">Jabatan / posisi</span><input class="input" name="jabatan" maxlength="60" value="' + esc(e.jabatan) + '"></label>' +
+      '<label class="field"><span class="label">Departemen</span><input class="input" name="departemen" list="dept-list" maxlength="60" value="' + esc(e.departemen) + '"></label>' +
+      '<label class="field"><span class="label">Email</span><input class="input" type="email" name="email" maxlength="100" value="' + esc(e.email) + '"></label>' +
+      '<label class="field"><span class="label">No. HP</span><input class="input" name="noHp" inputmode="tel" maxlength="20" value="' + esc(e.noHp) + '"></label>' +
+      '<label class="field span-2"><span class="label">Alamat</span><input class="input" name="alamat" maxlength="200" value="' + esc(e.alamat) + '"></label>' +
+      '<label class="field"><span class="label">Tanggal bergabung</span><input class="input" type="date" name="tanggalBergabung" value="' + esc(e.tanggalBergabung) + '"></label>' +
+      '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Aktif', 'Nonaktif'], e.status) + '</select></label>' +
+      '<div class="form-section span-2">Aturan absensi</div>' +
+
+      '<div class="field span-2"><span class="label">Lokasi absensi yang diizinkan</span>' + locChips + '<span class="hint">Kosongkan untuk mengizinkan semua lokasi kerja aktif.</span></div>' +
+      (canAccount ? '<div class="form-section span-2">Akun login</div>' +
+        '<label class="switch span-2"><input type="checkbox" name="createAccount"' + (isNew ? ' checked' : '') + '><span class="track"></span><span>Buatkan akun login untuk karyawan ini</span></label>' +
+        '<label class="field" data-acc><span class="label">Username</span><input class="input" name="username" maxlength="30" autocapitalize="none" spellcheck="false" placeholder="mis. budi.santoso"><span class="hint">Huruf kecil, angka, titik, strip.</span></label>' +
+        (isAdmin ? '<label class="field" data-acc><span class="label">Role</span><select class="select" name="accountRole">' + UI.options(meta.roles, 'karyawan') + '</select></label>' : '') : '') +
+      '<div class="span-2" data-err></div></form>',
+    foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('check') + 'Simpan</button>',
+  });
+  const form = $('form', m.el);
+  on(form, 'change', '.chip input', (ev, inp) => inp.parentNode.classList.toggle('is-on', inp.checked));
+  const acc = $('[name=createAccount]', form);
+  const syncAcc = () => $$('[data-acc]', form).forEach(x => x.classList.toggle('hidden', !acc.checked));
+  if (acc) { acc.addEventListener('change', syncAcc); syncAcc(); }
+  const nameInp = $('[name=nama]', form), userInp = $('[name=username]', form);
+  if (userInp && isNew) nameInp.addEventListener('input', () => {
+    if (!userInp.dataset.touched) userInp.value = nameInp.value.toLowerCase().trim().replace(/[^a-z0-9\s.]/g, '').replace(/\s+/g, '.').slice(0, 30);
+  });
+  if (userInp) userInp.addEventListener('input', () => { userInp.dataset.touched = '1'; });
+  $('[data-save]', m.el).addEventListener('click', async () => {
+    const v = UI.formValues(form);
+    const err = $('[data-err]', form);
+    err.innerHTML = '';
+    if (!v.nama) { err.innerHTML = UI.callout('danger', 'Nama lengkap wajib diisi.'); return; }
+    if (!isNew) v.employeeId = e.employeeId;
+    v.locationIds = v.locationIds || [];
+    const btn = $('[data-save]', m.el);
+    UI.busy(btn, true, 'Menyimpan…');
+    try {
+      const r = await api('employees.save', v);
+      m.close();
+      UI.toast(isNew ? 'Karyawan ' + r.employeeId + ' ditambahkan.' : 'Data karyawan diperbarui.', 'success');
+      META_CACHE = null;
+      if (r.account) UI.secret('Akun login dibuat', 'Akun untuk ' + v.nama + ' (username: ' + r.account.username + ') berhasil dibuat. Password sementara:', r.account.tempPassword);
+      if (onSaved) onSaved(r);
+    } catch (ex) {
+      UI.busy(btn, false);
+      err.innerHTML = UI.callout('danger', esc(ex.message));
+    }
+  });
+}
+
+Pages.karyawan = {
+  async render(view, param, gen) {
+    const res = await Promise.all([api.swr('employees.list'), metaOptions()]);
+    if (!App.alive(gen)) return;
+    const data = res[0], meta = res[1];
+    const reload = () => App.route();
+    view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Data karyawan</h1><p class="page-sub">Kelola data karyawan perusahaan · ' + data.employees.length + ' karyawan</p></div>' +
+      (data.canEdit ? '<button class="btn btn-primary" data-add>' + icon('plus') + 'Tambah karyawan</button>' : '') + '</div><div class="card" id="emp-card"></div>';
+    const tools = '<select class="select" data-f="departemen" style="width:auto;min-width:160px">' + UI.options(meta.departments, '', 'Semua departemen') + '</select>' +
+      '<select class="select" data-f="status" style="width:auto">' + UI.options(['Aktif', 'Nonaktif'], '', 'Semua status') + '</select>';
+    const table = DataTable({
+      rows: data.employees,
+      searchKeys: ['nama', 'employeeId', 'jabatan', 'departemen', 'email', 'username'],
+      searchPlaceholder: 'Cari nama, NIK, atau posisi…',
+      tools: tools,
+      empty: { icon: 'users', title: 'Belum ada karyawan', text: data.canEdit ? 'Tambahkan karyawan pertama Anda.' : '' },
+      columns: [
+        { label: 'No', cls: 'col-num', render: (r, i) => String(i + 1) },
+        { label: 'Karyawan', render: r => '<a href="#/profil/' + encodeURIComponent(r.employeeId) + '" style="color:inherit;text-decoration:none">' + UI.person(r.nama, r.email || (r.username ? '@' + r.username : '')) + '</a>' },
+        { label: 'NIK', render: r => '<span class="num">' + esc(r.employeeId) + '</span>' },
+        { label: 'Posisi', render: r => esc(r.jabatan || '–') },
+        { label: 'Departemen', render: r => esc(r.departemen || '–') },
+        { label: 'Status', render: r => UI.badge(r.status) },
+        { label: 'Aksi', cls: 'col-actions', render: r => '<div class="row" style="justify-content:flex-end;gap:4px">' +
+          '<a class="icon-btn" href="#/profil/' + encodeURIComponent(r.employeeId) + '" title="Lihat profil" aria-label="Lihat profil">' + icon('eye') + '</a>' +
+          (data.canEdit ? '<button class="icon-btn tone-primary" data-edit="' + esc(r.employeeId) + '" title="Edit" aria-label="Edit">' + icon('edit', 'ic-sm') + '</button>' +
+            '<button class="icon-btn tone-danger" data-del="' + esc(r.employeeId) + '" title="Hapus" aria-label="Hapus">' + icon('trash', 'ic-sm') + '</button>' : '') + '</div>' },
+      ],
+    });
+    $('#emp-card', view).appendChild(table.el);
+    const applyFilter = () => {
+      const dept = $('[data-f=departemen]', view).value, status = $('[data-f=status]', view).value;
+      table.setRows(data.employees.filter(e => (!dept || e.departemen === dept) && (!status || e.status === status)));
+    };
+    $$('[data-f]', view).forEach(s => s.addEventListener('change', applyFilter));
+    const byId = id => data.employees.find(e => e.employeeId === id);
+    on(view, 'click', '[data-add]', () => employeeForm(null, meta, reload));
+    on(view, 'click', '[data-edit]', (ev, b) => employeeForm(byId(b.dataset.edit), meta, reload));
+    on(view, 'click', '[data-del]', async (ev, b) => {
+      const emp = byId(b.dataset.del);
+      if (!await UI.confirm({ title: 'Hapus karyawan', message: 'Hapus ' + emp.nama + ' (' + emp.employeeId + ') beserta akun loginnya? Karyawan langsung hilang dari daftar dan tidak bisa login lagi. Riwayat absensi, laporan, dan foto tetap tersimpan di spreadsheet & Drive sebagai arsip, tetapi tidak lagi tampil di rekap. Unduh CSV rekap dulu bila masih diperlukan.', confirmText: 'Hapus', tone: 'danger' })) return;
+      try {
+        const r = await api('employees.remove', { employeeId: emp.employeeId });
+        UI.toast(r.message, 'success');
+        META_CACHE = null;
+        reload();
+      } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+  },
+};
+
+/* ---------- Profil ---------- */
+Pages.profil = {
+  async render(view, param, gen) {
+    const id = param || App.user.employeeId;
+    if (!id) {
+      const u = App.user;
+      view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Profil saya</h1><p class="page-sub">Informasi akun</p></div></div>' +
+        '<div class="card" style="max-width:560px"><div class="card-body"><div class="row" style="gap:16px">' + UI.avatar(u.nama, 'md') +
+        '<div><div class="card-title">' + esc(u.nama) + '</div><div class="muted small">' + esc(u.roleLabel) + ' · @' + esc(u.username) + '</div></div></div>' +
+        '<div class="mt-4">' + UI.callout('info', 'Akun ini tidak terhubung dengan data karyawan, sehingga tidak memiliki riwayat absensi.') + '</div>' +
+        '<button class="btn btn-outline mt-4" data-pw>' + icon('key') + 'Ubah password</button></div></div>';
+      $('[data-pw]', view).addEventListener('click', () => App.changePasswordDialog());
+      return;
+    }
+    const res = await Promise.all([api.swr('employees.get', { employeeId: id }), api.swr('attendance.history', { employeeId: id, days: 31 })]);
+    if (!App.alive(gen)) return;
+    const d = res[0], hist = res[1].records;
+    const e = d.employee;
+    const activeJobs = d.jobs.filter(j => j.status !== 'Selesai');
+    view.innerHTML =
+      '<div class="page-head"><div><h1 class="page-title">' + (d.isSelf ? 'Profil saya' : 'Profil karyawan') + '</h1><p class="page-sub">Detail informasi karyawan</p></div>' +
+        (!d.isSelf ? '<button class="btn btn-outline" onclick="history.back()">' + icon('chevronLeft') + 'Kembali</button>' : '') + '</div>' +
+      '<div class="grid" style="grid-template-columns:minmax(0,300px) minmax(0,1fr)" id="prof-grid">' +
+        '<div class="card"><div class="card-body" style="text-align:center;padding:28px 20px">' +
+          '<div style="display:flex;justify-content:center">' + UI.avatar(e.nama, 'lg') + '</div>' +
+          '<div class="card-title mt-4" style="font-size:17px">' + esc(e.nama) + '</div><div class="muted">' + esc(e.jabatan || '–') + '</div>' +
+          '<div class="mt-2">' + UI.badge(e.status) + '</div>' +
+          '<div class="mt-6" style="display:grid;gap:8px">' +
+            (d.canEdit ? '<button class="btn btn-primary btn-block" data-edit>' + icon('edit', 'ic-sm') + 'Edit profil</button>' : '') +
+            (d.isSelf && !d.canEdit ? '<button class="btn btn-primary btn-block" data-self>' + icon('edit', 'ic-sm') + 'Perbarui kontak</button>' : '') +
+            (d.isSelf ? '<button class="btn btn-outline btn-block" data-pw>' + icon('key', 'ic-sm') + 'Ubah password</button>' : '') +
+          '</div></div></div>' +
+        '<div class="card"><div class="tabs" style="padding:0 12px" role="tablist">' +
+          '<button class="tab is-active" data-tab="info">Informasi</button><button class="tab" data-tab="jobs">Jobdesk</button><button class="tab" data-tab="hist">Riwayat absensi</button></div>' +
+          '<div class="card-body" data-panel="info"><div class="grid grid-main stack-sm" style="gap:24px">' +
+            '<div><div class="form-section" style="margin-bottom:12px">Informasi pribadi</div><dl class="kv">' +
+              '<dt>NIK</dt><dd class="num">' + esc(e.employeeId) + '</dd>' +
+              '<dt>Email</dt><dd>' + esc(e.email || '–') + '</dd>' +
+              '<dt>No. HP</dt><dd>' + esc(e.noHp || '–') + '</dd>' +
+              '<dt>Alamat</dt><dd>' + esc(e.alamat || '–') + '</dd>' +
+              '<dt>Departemen</dt><dd>' + esc(e.departemen || '–') + '</dd>' +
+              '<dt>Tanggal bergabung</dt><dd>' + esc(Fmt.date(e.tanggalBergabung)) + '</dd>' +
+            '</dl><div class="form-section" style="margin:20px 0 12px">Absensi</div><dl class="kv">' +
+              '<dt>Jam kerja</dt><dd>Bebas<div class="small muted">Check-in & check-out kapan saja</div></dd>' +
+              '<dt>Lokasi absensi</dt><dd>' + esc(d.locations.length ? d.locations.join(', ') : 'Belum ada lokasi aktif') + '</dd>' +
+              '<dt>Akun login</dt><dd>' + (d.account ? '@' + esc(d.account.username) + ' · ' + esc(d.account.roleLabel) + ' ' + UI.badge(d.account.status) +
+                (d.account.lastLoginAt ? '<div class="small muted">Login terakhir ' + esc(Fmt.iso(d.account.lastLoginAt)) + '</div>' : '') : 'Belum memiliki akun') + '</dd>' +
+            '</dl></div>' +
+            '<div><div class="form-section" style="margin-bottom:12px">Jobdesk aktif</div>' +
+              (activeJobs.length ? '<ul class="activity">' + activeJobs.slice(0, 6).map(j => '<li><span class="mark mark-out"></span><div><div>' + esc(j.judul) + '</div><div class="small muted">' + (j.deadline ? 'Deadline ' + esc(Fmt.date(j.deadline)) : 'Tanpa deadline') + '</div></div></li>').join('') + '</ul>'
+                : '<p class="small muted">Tidak ada jobdesk aktif.</p>') +
+            '</div></div></div>' +
+          '<div class="card-body hidden" data-panel="jobs">' + (d.jobs.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Jobdesk</th><th>Deadline</th><th>Prioritas</th><th>Status</th></tr></thead><tbody>' +
+            d.jobs.map(j => '<tr><td><div class="strong">' + esc(j.judul) + '</div><div class="small muted">' + esc(j.deskripsi) + '</div></td><td class="nowrap">' + esc(Fmt.date(j.deadline)) + '</td><td>' + UI.badge(j.prioritas) + '</td><td>' + UI.badge(j.status) + '</td></tr>').join('') +
+            '</tbody></table></div>' : UI.empty('clipboard', 'Belum ada jobdesk', '')) + '</div>' +
+          '<div class="card-body hidden" data-panel="hist">' + renderHistoryList(hist) + '</div>' +
+        '</div>' +
+      '</div>';
+    if (window.matchMedia('(max-width: 900px)').matches) $('#prof-grid', view).style.gridTemplateColumns = 'minmax(0,1fr)';
+    on(view, 'click', '[data-tab]', (ev, b) => {
+      $$('[data-tab]', view).forEach(t => t.classList.toggle('is-active', t === b));
+      $$('[data-panel]', view).forEach(p => p.classList.toggle('hidden', p.dataset.panel !== b.dataset.tab));
+    });
+    const pw = $('[data-pw]', view);
+    if (pw) pw.addEventListener('click', () => App.changePasswordDialog());
+    const edit = $('[data-edit]', view);
+    if (edit) edit.addEventListener('click', async () => {
+      const meta = await metaOptions();
+      employeeForm(Object.assign({}, e, { username: d.account ? d.account.username : '' }), meta, () => App.route());
+    });
+    const self = $('[data-self]', view);
+    if (self) self.addEventListener('click', () => {
+      const m = UI.modal({
+        title: 'Perbarui kontak', size: 'sm',
+        body: '<form style="display:grid;gap:14px"><label class="field"><span class="label">No. HP</span><input class="input" name="noHp" inputmode="tel" maxlength="20" value="' + esc(e.noHp) + '"></label>' +
+          '<label class="field"><span class="label">Alamat</span><textarea class="textarea" name="alamat" maxlength="200">' + esc(e.alamat) + '</textarea></label><div data-err></div></form>',
+        foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>Simpan</button>',
+      });
+      $('[data-save]', m.el).addEventListener('click', async () => {
+        const btn = $('[data-save]', m.el);
+        UI.busy(btn, true, 'Menyimpan…');
+        try { await api('employees.updateSelf', UI.formValues($('form', m.el))); m.close(); UI.toast('Kontak diperbarui.', 'success'); App.route(); }
+        catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+      });
+    });
+  },
+};
+
+/* ---------- Jobdesk ---------- */
+function jobForm(job, meta, onSaved) {
+  const j = job || { prioritas: 'Sedang', status: 'Pending' };
+  const m = UI.modal({
+    title: job ? 'Edit jobdesk' : 'Tambah jobdesk',
+    body: '<form class="form-grid" novalidate>' +
+      '<label class="field span-2"><span class="label">Karyawan <span class="req-mark">*</span></span><select class="select" name="employeeId">' +
+        UI.options(meta.employees.map(e => ({ value: e.employeeId, label: e.nama + ' · ' + (e.departemen || '-') })), j.employeeId, 'Pilih karyawan') + '</select></label>' +
+      '<label class="field span-2"><span class="label">Judul jobdesk <span class="req-mark">*</span></span><input class="input" name="judul" maxlength="120" value="' + esc(j.judul) + '"></label>' +
+      '<label class="field span-2"><span class="label">Deskripsi</span><textarea class="textarea" name="deskripsi" maxlength="1000">' + esc(j.deskripsi) + '</textarea></label>' +
+      '<label class="field"><span class="label">Deadline</span><input class="input" type="date" name="deadline" value="' + esc(j.deadline) + '"></label>' +
+      '<label class="field"><span class="label">Prioritas</span><select class="select" name="prioritas">' + UI.options(['Rendah', 'Sedang', 'Tinggi'], j.prioritas) + '</select></label>' +
+      '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Pending', 'In Progress', 'Selesai'], j.status) + '</select></label>' +
+      '<div class="span-2" data-err></div></form>',
+    foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('check') + 'Simpan</button>',
+  });
+  $('[data-save]', m.el).addEventListener('click', async () => {
+    const v = UI.formValues($('form', m.el));
+    if (job) v.jobId = job.jobId;
+    const btn = $('[data-save]', m.el);
+    UI.busy(btn, true, 'Menyimpan…');
+    try { await api('jobs.save', v); m.close(); UI.toast('Jobdesk disimpan.', 'success'); if (onSaved) onSaved(); }
+    catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+  });
+}
+
+Pages.jobdesk = {
+  async render(view, param, gen) {
+    const data = await api.swr('jobs.list');
+    const meta = data.canCreate ? await metaOptions() : null;
+    if (!App.alive(gen)) return;
+    const today = Clock.today();
+    let filter = '';
+    view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Jobdesk</h1><p class="page-sub">Daftar tugas dan tanggung jawab karyawan</p></div>' +
+      (data.canCreate ? '<button class="btn btn-primary" data-add>' + icon('plus') + 'Tambah jobdesk</button>' : '') + '</div><div class="card" id="job-card"></div>';
+    const tools = '<div class="segmented" role="tablist">' + ['', 'Pending', 'In Progress', 'Selesai'].map(s => '<button data-st="' + s + '" class="' + (s === filter ? 'is-active' : '') + '">' + (s || 'Semua') + '</button>').join('') + '</div>';
+    const table = DataTable({
+      rows: data.jobs,
+      searchKeys: ['nama', 'judul', 'deskripsi', 'departemen'],
+      searchPlaceholder: 'Cari tugas atau karyawan…',
+      tools: tools,
+      empty: { icon: 'clipboard', title: 'Belum ada jobdesk', text: data.canCreate ? 'Tambahkan tugas untuk karyawan.' : 'Tugas yang diberikan kepada Anda akan tampil di sini.' },
+      columns: [
+        { label: 'No', cls: 'col-num', render: (r, i) => String(i + 1) },
+        { label: 'Karyawan', render: r => UI.person(r.nama, r.jabatan) },
+        { label: 'Jobdesk', render: r => '<div class="strong">' + esc(r.judul) + '</div>' + (r.deskripsi ? '<div class="small muted" style="max-width:360px">' + esc(r.deskripsi) + '</div>' : '') },
+        { label: 'Deadline', cls: 'nowrap', render: r => r.deadline ? '<span class="num" style="' + (r.status !== 'Selesai' && today && r.deadline < today ? 'color:var(--danger);font-weight:600' : '') + '">' + esc(Fmt.date(r.deadline)) + '</span>' : '<span class="faint">–</span>' },
+        { label: 'Prioritas', render: r => UI.badge(r.prioritas) },
+        { label: 'Status', render: r => r.canUpdate ? '<select class="select" data-status="' + esc(r.jobId) + '" style="height:32px;width:auto;font-size:13px" aria-label="Status">' + UI.options(['Pending', 'In Progress', 'Selesai'], r.status) + '</select>' : UI.badge(r.status) },
+        { label: 'Aksi', cls: 'col-actions', render: r => r.canManage ? '<div class="row" style="justify-content:flex-end;gap:4px"><button class="icon-btn tone-primary" data-edit="' + esc(r.jobId) + '" aria-label="Edit">' + icon('edit', 'ic-sm') + '</button>' +
+          '<button class="icon-btn tone-danger" data-del="' + esc(r.jobId) + '" aria-label="Hapus">' + icon('trash', 'ic-sm') + '</button></div>' : '' },
+      ],
+    });
+    $('#job-card', view).appendChild(table.el);
+    on(view, 'click', '[data-st]', (ev, b) => {
+      filter = b.dataset.st;
+      $$('[data-st]', view).forEach(x => x.classList.toggle('is-active', x === b));
+      table.setRows(data.jobs.filter(j => !filter || j.status === filter));
+    });
+    const byId = id => data.jobs.find(j => j.jobId === id);
+    on(view, 'click', '[data-add]', () => jobForm(null, meta, () => App.route()));
+    on(view, 'click', '[data-edit]', (ev, b) => jobForm(byId(b.dataset.edit), meta, () => App.route()));
+    on(view, 'click', '[data-del]', async (ev, b) => {
+      const j = byId(b.dataset.del);
+      if (!await UI.confirm({ title: 'Hapus jobdesk', message: 'Hapus "' + j.judul + '"?', confirmText: 'Hapus', tone: 'danger' })) return;
+      try { await api('jobs.remove', { jobId: j.jobId }); UI.toast('Jobdesk dihapus.', 'success'); App.route(); } catch (ex) { UI.toast(ex.message, 'danger'); }
+    });
+    on(view, 'change', '[data-status]', async (ev, sel) => {
+      sel.disabled = true;
+      try {
+        await api('jobs.updateStatus', { jobId: sel.dataset.status, status: sel.value });
+        const j = byId(sel.dataset.status); if (j) j.status = sel.value;
+        UI.toast('Status diperbarui.', 'success');
+      } catch (ex) { UI.toast(ex.message, 'danger'); App.route(); }
+      sel.disabled = false;
+    });
+  },
+};
+
+/* ---------- Izin & Cuti ---------- */
+function leaveForm(onSaved) {
+  const today = Clock.today();
+  const m = UI.modal({
+    title: 'Ajukan izin / cuti',
+    body: '<form class="form-grid" novalidate>' +
+      '<label class="field span-2"><span class="label">Jenis pengajuan</span><select class="select" name="jenis">' + UI.options(['Izin', 'Sakit', 'Cuti', 'Dinas Luar'], 'Izin') + '</select></label>' +
+      '<label class="field"><span class="label">Tanggal mulai</span><input class="input" type="date" name="tanggalMulai" value="' + esc(today) + '"></label>' +
+      '<label class="field"><span class="label">Tanggal selesai</span><input class="input" type="date" name="tanggalSelesai" value="' + esc(today) + '"></label>' +
+      '<label class="field span-2"><span class="label">Alasan <span class="req-mark">*</span></span><textarea class="textarea" name="alasan" maxlength="300" placeholder="Jelaskan alasan pengajuan"></textarea><span class="hint">Maksimal 30 hari per pengajuan. Tanggal lampau maksimal 7 hari ke belakang.</span></label>' +
+      '<div class="span-2" data-err></div></form>',
+    foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-save>' + icon('send', 'ic-sm') + 'Kirim pengajuan</button>',
+  });
+  $('[data-save]', m.el).addEventListener('click', async () => {
+    const btn = $('[data-save]', m.el);
+    UI.busy(btn, true, 'Mengirim…');
+    try { await api('leave.submit', UI.formValues($('form', m.el))); m.close(); UI.toast('Pengajuan terkirim dan menunggu persetujuan.', 'success'); if (onSaved) onSaved(); }
+    catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+  });
+}
+
+function leaveRange(l) {
+  return l.tanggalMulai === l.tanggalSelesai ? Fmt.date(l.tanggalMulai) : Fmt.date(l.tanggalMulai) + ' – ' + Fmt.date(l.tanggalSelesai);
+}
+
+Pages.izin = {
+  async render(view, param, gen) {
+    const staff = STAFF_ROLES.indexOf(App.user.role) >= 0;
+    const hasEmp = !!App.user.employeeId;
+    const tab = staff && (param === 'persetujuan' || !hasEmp) ? 'approvals' : 'mine';
+    view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Izin &amp; cuti</h1><p class="page-sub">Pengajuan izin, sakit, cuti, dan dinas luar</p></div>' +
+      (hasEmp && tab === 'mine' ? '<button class="btn btn-primary" data-add>' + icon('plus') + 'Ajukan izin / cuti</button>' : '') + '</div>' +
+      (staff && hasEmp ? '<div class="tabs" style="margin:-6px 0 16px"><a class="tab ' + (tab === 'mine' ? 'is-active' : '') + '" href="#/izin">Pengajuan saya</a><a class="tab ' + (tab === 'approvals' ? 'is-active' : '') + '" href="#/izin/persetujuan">Persetujuan</a></div>' : '') +
+      '<div class="card" id="leave-card">' + UI.loading() + '</div>';
+    const card = $('#leave-card', view);
+    on(view, 'click', '[data-add]', () => leaveForm(() => App.route()));
+    if (tab === 'mine') {
+      const data = await api.swr('leave.list', { scope: 'mine' });
+      if (!App.alive(gen)) return;
+      card.innerHTML = '';
+      const t = DataTable({
+        rows: data.requests,
+        empty: { icon: 'calendar', title: 'Belum ada pengajuan', text: 'Ajukan izin, sakit, atau cuti melalui tombol di atas.' },
+        columns: [
+          { label: 'Jenis', render: r => '<span class="strong">' + esc(r.jenis) + '</span>' },
+          { label: 'Tanggal', cls: 'nowrap', render: r => esc(leaveRange(r)) },
+          { label: 'Hari', cls: 'num', render: r => esc(r.hari) },
+          { label: 'Alasan', render: r => '<div style="max-width:320px">' + esc(r.alasan) + '</div>' },
+          { label: 'Status', render: r => UI.badge(r.status) + (r.catatan ? '<div class="small muted mt-1">' + esc(r.catatan) + '</div>' : '') },
+          { label: 'Diajukan', cls: 'nowrap small', render: r => esc(Fmt.iso(r.diajukanAt)) },
+          { label: '', cls: 'col-actions', render: r => r.status === 'Menunggu' ? '<button class="btn btn-sm btn-ghost" data-cancel="' + esc(r.leaveId) + '">Batalkan</button>' : '' },
+        ],
+      });
+      card.appendChild(t.el);
+      on(card, 'click', '[data-cancel]', async (ev, b) => {
+        if (!await UI.confirm({ title: 'Batalkan pengajuan', message: 'Batalkan pengajuan ini?', confirmText: 'Batalkan', tone: 'danger' })) return;
+        try { await api('leave.cancel', { leaveId: b.dataset.cancel }); UI.toast('Pengajuan dibatalkan.', 'success'); App.route(); } catch (ex) { UI.toast(ex.message, 'danger'); }
+      });
+      return;
+    }
+    let status = 'Menunggu';
+    let first = true;
+    const load = async () => {
+      card.innerHTML = UI.loading();
+      const data = await (first ? api.swr : api)('leave.list', { scope: 'approvals', status: status });
+      first = false;
+      if (!App.alive(gen)) return;
+      card.innerHTML = '';
+      const tools = '<div class="segmented">' + ['Menunggu', 'Disetujui', 'Ditolak', ''].map(s => '<button data-st="' + s + '" class="' + (s === status ? 'is-active' : '') + '">' + (s || 'Semua') + '</button>').join('') + '</div>';
+      const t = DataTable({
+        rows: data.requests, tools: tools, searchKeys: ['nama', 'jenis', 'alasan', 'departemen'], searchPlaceholder: 'Cari karyawan…',
+        empty: { icon: 'calendarCheck', title: status === 'Menunggu' ? 'Tidak ada pengajuan yang menunggu' : 'Tidak ada data', text: '' },
+        columns: [
+          { label: 'Karyawan', render: r => UI.person(r.nama, r.departemen) },
+          { label: 'Jenis', render: r => esc(r.jenis) },
+          { label: 'Tanggal', cls: 'nowrap', render: r => esc(leaveRange(r)) + '<div class="small muted">' + r.hari + ' hari</div>' },
+          { label: 'Alasan', render: r => '<div style="max-width:300px">' + esc(r.alasan) + '</div>' },
+          { label: 'Diajukan', cls: 'nowrap small', render: r => esc(Fmt.iso(r.diajukanAt)) },
+          { label: 'Status', render: r => UI.badge(r.status) + (r.diprosesOleh ? '<div class="small muted mt-1">oleh ' + esc(r.diprosesOleh) + '</div>' : '') },
+          { label: 'Aksi', cls: 'col-actions', render: r => r.status === 'Menunggu' ? '<button class="btn btn-sm btn-primary" data-decide="' + esc(r.leaveId) + '">Proses</button>' : '' },
+        ],
+      });
+      card.appendChild(t.el);
+      on(t.el, 'click', '[data-st]', (ev, b) => { status = b.dataset.st; load(); });
+      on(t.el, 'click', '[data-decide]', (ev, b) => {
+        const l = data.requests.find(x => x.leaveId === b.dataset.decide);
+        const m = UI.modal({
+          title: 'Proses pengajuan',
+          body: '<dl class="kv"><dt>Karyawan</dt><dd>' + esc(l.nama) + '</dd><dt>Jenis</dt><dd>' + esc(l.jenis) + '</dd><dt>Tanggal</dt><dd>' + esc(leaveRange(l)) + ' (' + l.hari + ' hari)</dd><dt>Alasan</dt><dd>' + esc(l.alasan) + '</dd></dl>' +
+            '<label class="field mt-4"><span class="label">Catatan untuk karyawan (opsional)</span><textarea class="textarea" name="catatan" maxlength="300"></textarea></label><div data-err class="mt-3"></div>',
+          foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-danger" data-d="Ditolak">Tolak</button><button class="btn btn-success" data-d="Disetujui">' + icon('check') + 'Setujui</button>',
+        });
+        on(m.el, 'click', '[data-d]', async (e2, btn) => {
+          UI.busy(btn, true, 'Menyimpan…');
+          try {
+            await api('leave.decide', { leaveId: l.leaveId, decision: btn.dataset.d, catatan: $('[name=catatan]', m.el).value });
+            m.close();
+            UI.toast('Pengajuan ' + btn.dataset.d.toLowerCase() + '.', 'success');
+            App.refreshNotif();
+            load();
+          } catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+        });
+      });
+    };
+    await load();
+  },
+};
+
+/* ---------- Monitoring absensi tim (Absensi & Laporan) ---------- */
+const FLAG_LABELS = {
+  ACC_SUSPICIOUS: 'Akurasi GPS di bawah 1 m (tidak wajar untuk GPS ponsel)',
+  EXACT_OFFICE_COORD: 'Koordinat persis sama dengan titik kantor',
+  LOW_PRECISION: 'Koordinat berpresisi rendah (≤ 3 angka desimal)',
+  IMPOSSIBLE_TRAVEL: 'Perpindahan lokasi terlalu cepat dibanding transaksi sebelumnya',
+  FACE_NOT_DETECTED: 'Wajah tidak terdeteksi oleh pemeriksaan otomatis',
+  LAMPIRAN: 'Foto diambil lewat kamera HP (lampiran), bukan kamera langsung di aplikasi',
+  TANPA_ABSEN: 'Tidak ada check-in pada tanggal laporan bonus ini',
+  FOTO_LAMA: 'File foto berumur lebih dari 15 menit saat dikirim (kemungkinan foto lama)',
+};
+function flagText(f) {
+  const p = String(f).split(':');
+  return (p[0] === 'OUT' ? 'Pulang: ' : 'Masuk: ') + (FLAG_LABELS[p[1]] || p[1]);
+}
+
+const TeamAttendance = {
+  async render(box, gen, opts) {
+    if (!Clock.today()) await Clock.sync().catch(() => null);
+    const today = Clock.today();
+    const meta = await metaOptions();
+    if (!App.alive(gen)) return;
+    box.innerHTML = '<div class="card"><div class="table-tools" style="border-bottom:1px solid var(--border)">' +
+      '<label class="field" style="flex:0 1 160px"><span class="label">Dari</span><input class="input" type="date" data-from value="' + esc(today) + '"></label>' +
+      '<label class="field" style="flex:0 1 160px"><span class="label">Sampai</span><input class="input" type="date" data-to value="' + esc(today) + '"></label>' +
+      '<label class="field" style="flex:0 1 200px"><span class="label">Departemen</span><select class="select" data-dept>' + UI.options(meta.departments, '', 'Semua') + '</select></label>' +
+      '<div class="row" style="align-self:flex-end;gap:8px"><button class="btn btn-primary" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button>' +
+      '<button class="btn btn-outline" data-csv>' + icon('download', 'ic-sm') + 'CSV</button></div></div>' +
+      '<div data-summary style="padding:14px 18px 0" class="row wrap"></div><div data-table></div></div>';
+    let current = null;
+    let first = true;
+    const load = async () => {
+      const tbox = $('[data-table]', box);
+      tbox.innerHTML = '<div style="padding:18px">' + UI.loading() + '</div>';
+      const call = first ? api.swr : api;
+      first = false;
+      try {
+        current = await call('attendance.list', { from: $('[data-from]', box).value, to: $('[data-to]', box).value, departemen: $('[data-dept]', box).value });
+      } catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
+      if (!App.alive(gen)) return;
+      const recs = current.records;
+      const flagged = recs.filter(r => r.flags && r.flags.length).length;
+      $('[data-summary]', box).innerHTML =
+        UI.badge(recs.filter(r => r.status === 'Hadir').length + ' hadir', 'success') + ' ' +
+        UI.badge(recs.filter(r => !r.checkOut).length + ' belum check-out', 'neutral') + ' ' +
+        (flagged ? UI.badge(flagged + ' perlu ditinjau', 'danger') : '');
+      const t = DataTable({
+        rows: recs, pageSize: 15,
+        searchKeys: ['nama', 'employeeId', 'departemen', 'status'], searchPlaceholder: 'Cari karyawan…',
+        empty: { icon: 'scan', title: 'Belum ada data absensi', text: 'Tidak ada check-in pada rentang tanggal ini.' },
+        columns: [
+          { label: 'Tanggal', cls: 'nowrap', render: r => esc(Fmt.date(r.workDate)) },
+          { label: 'Karyawan', render: r => UI.person(r.nama, r.departemen) },
+          { label: 'Masuk', cls: 'num', render: r => esc(Fmt.time(r.checkIn)) },
+          { label: 'Pulang', cls: 'num', render: r => esc(Fmt.time(r.checkOut)) },
+          { label: 'Status', render: r => UI.badge(r.status) },
+          { label: 'Durasi', cls: 'nowrap small', render: r => r.workMinutes ? esc(Fmt.minutes(r.workMinutes)) : '–' },
+          { label: 'Jarak', cls: 'nowrap small', render: r => esc(Fmt.dist(r.checkInDistance)) + (r.checkOut ? ' / ' + esc(Fmt.dist(r.checkOutDistance)) : '') },
+          { label: 'Tinjau', cls: 'center', render: r => r.flags && r.flags.length ? '<span title="' + esc(r.flags.map(flagText).join('\n')) + '" style="color:var(--danger)">' + icon('flag', 'ic-sm') + '</span>' : '' },
+          { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-detail="' + esc(r.attendanceId) + '">Detail</button>' },
+        ],
+      });
+      tbox.innerHTML = '';
+      tbox.appendChild(t.el);
+      on(t.el, 'click', '[data-detail]', (ev, b) => this.detail(current.records.find(r => r.attendanceId === b.dataset.detail), current, load));
+    };
+    $('[data-load]', box).addEventListener('click', load);
+    $('[data-csv]', box).addEventListener('click', () => {
+      if (!current) return;
+      const coords = current.showCoords;
+      const header = ['Tanggal', 'NIK', 'Nama', 'Departemen', 'Jabatan', 'Masuk', 'Pulang', 'Status', 'Durasi kerja (menit)',
+        'Lokasi', 'Jarak masuk (m)', 'Akurasi masuk (m)', 'Jarak pulang (m)', 'Akurasi pulang (m)', 'Catatan', 'Penanda'].concat(coords ? ['Lat masuk', 'Lng masuk', 'Lat pulang', 'Lng pulang'] : []);
+      const rows = current.records.map(r => [r.workDate, r.employeeId, r.nama, r.departemen, r.jabatan, r.checkIn, r.checkOut, r.status, r.workMinutes,
+        r.locationName, r.checkInDistance, r.checkInAccuracy, r.checkOutDistance, r.checkOutAccuracy, r.note, (r.flags || []).join(' ')].concat(coords ? [r.checkInLat, r.checkInLng, r.checkOutLat, r.checkOutLng] : []));
+      downloadCsv('absensi_' + $('[data-from]', box).value + '_' + $('[data-to]', box).value + '.csv', header, rows);
+    });
+    await load();
+  },
+
+  detail(r, ctx, reload) {
+    const coords = ctx.showCoords;
+    const maps = (lat, lng) => lat === null || lat === undefined ? '–' : '<a href="https://www.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng) + '" target="_blank" rel="noopener noreferrer">' + esc(Number(lat).toFixed(6) + ', ' + Number(lng).toFixed(6)) + '</a>';
+    const m = UI.modal({
+      title: 'Detail absensi', size: 'lg',
+      body: '<div class="grid grid-main stack-sm" style="gap:20px">' +
+        '<div><div class="row" style="gap:12px">' + UI.person(r.nama, r.departemen + ' · ' + r.employeeId, 'md') + '</div>' +
+          '<dl class="kv mt-4">' +
+            '<dt>Tanggal kerja</dt><dd>' + esc(r.workDateLabel) + '</dd>' +
+            '<dt>Masuk</dt><dd class="num">' + esc(r.checkIn || '–') + ' · ' + esc(Fmt.dist(r.checkInDistance)) + ' · ±' + esc(Math.round(r.checkInAccuracy || 0)) + ' m</dd>' +
+            '<dt>Pulang</dt><dd class="num">' + (r.checkOut ? esc(r.checkOut) + ' · ' + esc(Fmt.dist(r.checkOutDistance)) + ' · ±' + esc(Math.round(r.checkOutAccuracy || 0)) + ' m' : '–') + '</dd>' +
+            '<dt>Status</dt><dd>' + UI.badge(r.status) + '</dd>' +
+            '<dt>Durasi kerja</dt><dd>' + (r.workMinutes ? esc(Fmt.minutes(r.workMinutes)) : '–') + '</dd>' +
+            '<dt>Lokasi</dt><dd>' + esc(r.locationName || '–') + '</dd>' +
+            (coords ? '<dt>Koordinat masuk</dt><dd>' + maps(r.checkInLat, r.checkInLng) + '</dd><dt>Koordinat pulang</dt><dd>' + maps(r.checkOutLat, r.checkOutLng) + '</dd>' : '') +
+            '<dt>Catatan</dt><dd>' + esc(r.note || '–') + '</dd>' +
+            '<dt>ID transaksi</dt><dd class="small num">' + esc(r.attendanceId) + '</dd>' +
+          '</dl>' +
+          (r.flags && r.flags.length ? '<div class="mt-4">' + UI.callout('warning', '<strong>Perlu ditinjau</strong><ul style="margin:6px 0 0;padding-left:18px">' + r.flags.map(f => '<li>' + esc(flagText(f)) + '</li>').join('') + '</ul><div class="small mt-2">Penanda ini bukan bukti kecurangan; verifikasi dengan foto dan konfirmasi langsung.</div>') + '</div>' : '') +
+          (ctx.canEdit ? '<div class="divider"></div><div class="form-section" style="margin-bottom:10px">Koreksi oleh HR</div><div class="form-grid">' +
+            '<label class="field"><span class="label">Status</span><select class="select" name="status">' + UI.options(['Hadir', 'Izin', 'Sakit', 'Cuti', 'Dinas Luar', 'Alpha'].concat(['Hadir', 'Izin', 'Sakit', 'Cuti', 'Dinas Luar', 'Alpha'].indexOf(r.status) < 0 ? [r.status] : []), r.status) + '</select></label>' +
+            '<label class="field"><span class="label">Catatan</span><input class="input" name="note" maxlength="300" value="' + esc(r.note) + '"></label></div>' +
+            '<p class="hint mt-2">Jam, lokasi, dan foto tidak dapat diubah. Setiap koreksi tercatat di audit log.</p><div data-err class="mt-2"></div>' : '') +
+        '</div>' +
+        '<div><div class="photo-pair"><div><div class="small muted" style="margin-bottom:6px">Foto masuk</div><div class="photo-slot" data-photo="in">' + (r.hasPhotoIn ? '<span class="spinner"></span>' : 'Tidak ada foto') + '</div></div>' +
+          '<div><div class="small muted" style="margin-bottom:6px">Foto pulang</div><div class="photo-slot" data-photo="out">' + (r.hasPhotoOut ? '<span class="spinner"></span>' : 'Belum check-out') + '</div></div></div>' +
+          '<p class="hint mt-2">Foto dimuat dari Google Drive privat dan pengaksesan tercatat di audit log.</p>' +
+          (r.checkOut ? '<div class="divider"></div><div class="form-section" style="margin-bottom:8px">Laporan jobdesk</div><div data-work>' + UI.loading('Memuat laporan…') + '</div>' : '') +
+        '</div>' +
+      '</div>',
+      foot: ctx.canEdit ? '<button class="btn btn-outline" data-close>Tutup</button><button class="btn btn-primary" data-save>Simpan koreksi</button>' : '<button class="btn btn-outline" data-close>Tutup</button>',
+    });
+    if (r.checkOut) {
+      api('work.list', { attendanceId: r.attendanceId }).then(res => {
+        const box = $('[data-work]', m.el);
+        if (!box) return;
+        if (!res.reports.length) { box.innerHTML = '<p class="small muted">Tidak ada laporan jobdesk untuk absensi ini.</p>'; return; }
+        const first = res.reports[0];
+        box.innerHTML = '<ul class="people-list" style="margin:0">' + res.reports.map(w => '<li><span>' + esc(w.namaJobdesk) + ' ' + UI.badge(w.status) + '</span><span class="money">' + esc(Fmt.rupiah(w.tarif)) + '</span></li>').join('') + '</ul>' +
+          '<p class="small mt-2"><span class="muted">Keterangan:</span> ' + esc(first.keterangan) + '</p>' +
+          (first.hasPhoto ? '<button class="btn btn-sm btn-outline mt-2" data-work-photo>' + icon('image', 'ic-sm') + 'Lihat foto hasil kerja</button>' : '');
+        const b = $('[data-work-photo]', box);
+        if (b) b.addEventListener('click', () => showWorkPhoto(first));
+      }, ex => { const box = $('[data-work]', m.el); if (box) box.innerHTML = UI.callout('danger', esc(ex.message)); });
+    }
+    [['in', r.hasPhotoIn], ['out', r.hasPhotoOut]].forEach(p => {
+      if (!p[1]) return;
+      api('attendance.photo', { attendanceId: r.attendanceId, type: p[0] }).then(res => {
+        const slot = $('[data-photo="' + p[0] + '"]', m.el);
+        if (slot) slot.innerHTML = '<img alt="Foto absensi" src="' + res.dataUrl + '">';
+      }, ex => {
+        const slot = $('[data-photo="' + p[0] + '"]', m.el);
+        if (slot) slot.textContent = ex.message;
+      });
+    });
+    const save = $('[data-save]', m.el);
+    if (save) save.addEventListener('click', async () => {
+      UI.busy(save, true, 'Menyimpan…');
+      try {
+        await api('attendance.update', { attendanceId: r.attendanceId, status: $('[name=status]', m.el).value, note: $('[name=note]', m.el).value });
+        m.close(); UI.toast('Koreksi disimpan.', 'success'); reload();
+      } catch (ex) { UI.busy(save, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+    });
+  },
+};
+
+/* ---------- Laporan ---------- */
+Pages.laporan = {
+  async render(view, param, gen) {
+    const tab = param === 'riwayat' ? 'riwayat' : 'rekap';
+    view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Laporan</h1><p class="page-sub">Rekap kehadiran bulanan dan riwayat absensi</p></div></div>' +
+      '<div class="tabs" style="margin:-6px 0 16px"><a class="tab ' + (tab === 'rekap' ? 'is-active' : '') + '" href="#/laporan">Rekap bulanan</a><a class="tab ' + (tab === 'riwayat' ? 'is-active' : '') + '" href="#/laporan/riwayat">Riwayat absensi</a></div><div id="rep-body"></div>';
+    const body = $('#rep-body', view);
+    if (tab === 'riwayat') return TeamAttendance.render(body, gen, {});
+    if (!Clock.today()) await Clock.sync().catch(() => null);
+    const meta = await metaOptions();
+    if (!App.alive(gen)) return;
+    body.innerHTML = '<div class="card"><div class="table-tools" style="border-bottom:1px solid var(--border)">' +
+      '<label class="field" style="flex:0 1 180px"><span class="label">Bulan</span><input class="input" type="month" data-month value="' + esc(Clock.today().slice(0, 7)) + '"></label>' +
+      '<label class="field" style="flex:0 1 200px"><span class="label">Departemen</span><select class="select" data-dept>' + UI.options(meta.departments, '', 'Semua') + '</select></label>' +
+      '<div class="row" style="align-self:flex-end;gap:8px"><button class="btn btn-primary" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button><button class="btn btn-outline" data-csv>' + icon('download', 'ic-sm') + 'CSV</button></div></div>' +
+      '<div data-table></div></div>';
+    let current = null;
+    let first = true;
+    const load = async () => {
+      const tbox = $('[data-table]', body);
+      tbox.innerHTML = '<div style="padding:18px">' + UI.loading() + '</div>';
+      const call = first ? api.swr : api;
+      first = false;
+      try { current = await call('report.monthly', { month: $('[data-month]', body).value, departemen: $('[data-dept]', body).value }); }
+      catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
+      if (!App.alive(gen)) return;
+      const n = v => '<span class="num">' + esc(v) + '</span>';
+      const t = DataTable({
+        rows: current.rows, pageSize: 25, searchKeys: ['nama', 'employeeId', 'departemen'], searchPlaceholder: 'Cari karyawan…',
+        empty: { icon: 'report', title: 'Tidak ada data', text: '' },
+        footer: list => {
+          const tot = k => list.reduce((s, r) => s + (r[k] || 0), 0);
+          return '<tr><td colspan="2">Total (' + list.length + ' karyawan)</td><td class="right">' + tot('hadir') +
+            '</td><td class="right">' + tot('izin') + '</td><td class="right">' + tot('sakit') + '</td><td class="right">' + tot('cuti') + '</td><td class="right">' + tot('dinasLuar') +
+            '</td><td class="right">' + tot('tidakCheckout') + '</td><td class="right">' + esc(Fmt.minutes(tot('menitKerja'))) + '</td></tr>';
+        },
+        columns: [
+          { label: 'Karyawan', render: r => UI.person(r.nama, r.employeeId + (r.status !== 'Aktif' ? ' · nonaktif' : '')) },
+          { label: 'Departemen', render: r => esc(r.departemen || '–') },
+          { label: 'Hari hadir', cls: 'right', render: r => n(r.hadir) },
+          { label: 'Izin', cls: 'right', render: r => n(r.izin) },
+          { label: 'Sakit', cls: 'right', render: r => n(r.sakit) },
+          { label: 'Cuti', cls: 'right', render: r => n(r.cuti) },
+          { label: 'Dinas luar', cls: 'right', render: r => n(r.dinasLuar) },
+          { label: 'Tanpa check-out', cls: 'right', render: r => n(r.tidakCheckout) },
+          { label: 'Jam kerja', cls: 'right nowrap', render: r => esc(Fmt.minutes(r.menitKerja)) },
+        ],
+      });
+      tbox.innerHTML = '<div class="small muted" style="padding:12px 18px 0">' + esc(current.monthLabel) + ' · dihitung hingga hari ini · dibuat ' + esc(current.generatedAt) + '</div>';
+      tbox.appendChild(t.el);
+    };
+    $('[data-load]', body).addEventListener('click', load);
+    $('[data-csv]', body).addEventListener('click', () => {
+      if (!current) return;
+      const header = ['NIK', 'Nama', 'Jabatan', 'Departemen', 'Hari hadir', 'Izin', 'Sakit', 'Cuti', 'Dinas luar', 'Tanpa check-out', 'Menit kerja'];
+      const rows = current.rows.map(r => [r.employeeId, r.nama, r.jabatan, r.departemen, r.hadir, r.izin, r.sakit, r.cuti, r.dinasLuar, r.tidakCheckout, r.menitKerja]);
+      downloadCsv('rekap_absensi_' + current.month + '.csv', header, rows);
+    });
+    await load();
+  },
+};
+</script>
