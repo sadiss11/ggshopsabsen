@@ -91,6 +91,11 @@ function debounce(fn, ms) {
 }
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+/** Apakah browser mengizinkan penyimpanan lokal (di iframe pihak ketiga, mis. iPhone, bisa diblokir). */
+function storageWorks() {
+  try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); return true; } catch (e) { return false; }
+}
+
 const Store = {
   get(k) {
     try { return sessionStorage.getItem(k) || localStorage.getItem(k); } catch (e) { return Store.mem[k] || null; }
@@ -1033,7 +1038,8 @@ const App = {
               '<label class="field"><span class="label">Username</span><input class="input" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required></label>' +
               '<label class="field"><span class="label">Password</span><span class="rel"><input class="input" name="password" type="password" autocomplete="current-password" required style="padding-right:44px">' +
                 '<button type="button" class="icon-btn pw-toggle" data-toggle-pw aria-label="Tampilkan password">' + icon('eye') + '</button></span></label>' +
-              '<label class="check"><input type="checkbox" name="remember"> Ingat saya di perangkat ini</label>' +
+              '<label class="check"><input type="checkbox" name="remember" checked> Ingat saya di perangkat ini</label>' +
+              (storageWorks() ? '' : UI.callout('warning', 'Browser ini tidak mengizinkan aplikasi menyimpan status login, sehingga Anda akan keluar setiap kali halaman dimuat ulang (mis. setelah memotret). Buka aplikasi lewat <a href="https://ggshopsabsen.vercel.app" target="_top">ggshopsabsen.vercel.app</a>.')) +
               '<div id="login-error"></div>' +
               '<button class="btn btn-primary btn-lg btn-block" type="submit">' + icon('login') + 'Masuk</button>' +
             '</form>' +
@@ -1057,7 +1063,7 @@ const App = {
       UI.busy(btn, true, 'Memeriksa…');
       try {
         const t0 = performance.now();
-        const r = await api('auth.login', { username: v.username, password: $('[name=password]', form).value, page: this.parseHash().id });
+        const r = await api('auth.login', { username: v.username, password: $('[name=password]', form).value, page: this.parseHash().id, remember: !!v.remember });
         this.token = r.token;
         Store.set('sdm_token', r.token, v.remember);
         this.applyBoot(r, t0, performance.now());

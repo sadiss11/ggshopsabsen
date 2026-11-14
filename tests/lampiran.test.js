@@ -103,3 +103,32 @@ test('L05 lampiran tetap wajib lolos validasi lokasi, jam server, dan JPEG', () 
   assert.equal(res.serverTime.local.slice(0, 5), '07:50');
   assert.equal(makeJpeg().slice(0, 23), 'data:image/jpeg;base64,');
 });
+
+test('L06 foto dari galeri: diterima dengan penanda GALERI (+ FOTO_LAMA bila file lama), file yang sama tidak bisa dipakai ulang, ikut dinonaktifkan Admin', () => {
+  const t = bootstrap({ now: wib(DAY, '07:50') });
+  const galeri = (h, age) => ({ photoSource: 'galeri', photoOrigHash: h, photoAgeSec: age });
+  const workGaleri = (h, age) => ({ workPhotoSource: 'galeri', workPhotoOrigHash: h, workPhotoAgeSec: age });
+  const inHash = hex();
+  must(attend(t.env, t.tokens.budi, 'checkin', INSIDE, galeri(inHash, 3 * 86400)));
+  const flags = t.env.table('Attendance')[0].flags.split(',');
+  assert.ok(flags.includes('IN:GALERI') && flags.includes('IN:FOTO_LAMA'), flags.join(','));
+  assert.ok(!flags.includes('IN:LAMPIRAN'));
+  assert.equal(t.env.table('Attendance')[0].checkInPhotoHash, inHash);
+
+  t.env.setNow(wib(DAY, '17:05'));
+  // Foto galeri yang sudah dipakai pagi hari ditolak sebagai foto hasil kerja.
+  const reuse = attend(t.env, t.tokens.budi, 'checkout', INSIDE, Object.assign(lampiran(), workGaleri(inHash, 60)));
+  assert.equal(reuse.code, 'DUPLICATE_PHOTO', 'file galeri yang sama ditolak');
+  t.env.advance(5000);
+  must(attend(t.env, t.tokens.budi, 'checkout', INSIDE, Object.assign(lampiran(), workGaleri(hex(), 60))));
+  assert.equal(t.env.table('WorkReports')[0].flags, 'GALERI');
+  const view = must(t.env.api('work.list', { from: DAY, to: DAY }, t.tokens.rina)).reports[0];
+  assert.deepEqual(view.flags, ['GALERI']);
+
+  // Admin menonaktifkan foto kamera HP: galeri ikut ditolak.
+  t.env.setNow(wib('2026-10-27', '07:50'));
+  const admin = relogin(t.env, 'admin');
+  const cfg = must(t.env.api('settings.get', {}, admin)).config;
+  must(t.env.api('settings.save', Object.assign({}, cfg, { allowPhotoUpload: false }), admin));
+  assert.equal(attend(t.env, relogin(t.env, 'budi'), 'checkin', INSIDE, galeri(hex(), 10)).code, 'PHOTO_UPLOAD_DISABLED');
+});

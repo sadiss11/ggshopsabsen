@@ -32,6 +32,7 @@ function cameraErrorMessage(err) {
   return { title: 'Kamera tidak dapat diaktifkan', text: (err && err.message) || 'Terjadi kesalahan saat membuka kamera.' };
 }
 
+const SOURCE_LABEL = { lampiran: 'kamera HP', galeri: 'galeri' };
 const SHOT_LABEL = { selfie: 'Selfie', work: 'Foto hasil kerja' };
 
 /**
@@ -151,6 +152,7 @@ const Att = {
     this.applyState(st);
     $('#att-history').innerHTML = renderHistoryList(st.history || []);
     this.lastSecond = null;
+    this.lastDay = null;
     this.tick();
     this.timers.push(setInterval(() => this.tick(), 250));
     this.timers.push(setInterval(() => this.refreshState(), 60000));
@@ -216,7 +218,8 @@ const Att = {
     on(body, 'click', '[data-cam="start"]', () => this.startCamera());
     on(body, 'click', '[data-cam="stop"]', () => { this.stopCamera(); this.cam.status = 'idle'; this.renderCamera(); this.renderReqs(); });
     on(body, 'click', '[data-cam="shoot"]', () => this.capture());
-    on(body, 'click', '[data-cam="file"]', () => this.openFilePicker());
+    on(body, 'click', '[data-cam="file"]', () => this.openFilePicker('kamera'));
+    on(body, 'click', '[data-cam="gallery"]', () => this.openFilePicker('galeri'));
     $('#att-file').addEventListener('change', e => this.onFile(e.target.files && e.target.files[0]));
     on(body, 'click', '[data-cam="retake"]', () => this.retake(this.target));
     on(body, 'click', '[data-shot]', (e, b) => this.selectTarget(b.dataset.shot));
@@ -316,6 +319,10 @@ const Att = {
         t.innerHTML = esc(s) + '<span class="tz">' + esc(Clock.abbr()) + '</span>';
         $('#att-date').textContent = Clock.dateLabel(n);
         if (s.slice(-1) === '0') this.renderSync();
+        // Halaman dibiarkan terbuka melewati tengah malam: status hari baru langsung diambil.
+        const day = Clock.dateStr(n);
+        if (this.lastDay && day !== this.lastDay) this.refreshState();
+        this.lastDay = day;
       }
     }
   },
@@ -462,7 +469,7 @@ const Att = {
     ctx.fillText(res && rd ? 'Lokasi: ' + res.locationName + ' · ' + Fmt.dist(res.distance) + ' · ' + rd.lat.toFixed(5) + ', ' + rd.lng.toFixed(5) + ' (±' + Math.round(rd.accuracy) + ' m)' : 'Lokasi: belum terverifikasi', 22, H - band + 74);
     ctx.fillStyle = 'rgba(255, 255, 255, 0.62)';
     ctx.font = '400 15px Manrope, system-ui, sans-serif';
-    ctx.fillText((App.company.companyName || '') + ' · sesi ' + shot.nonce.slice(0, 8) + ' · ' + (shot.source === 'lampiran' ? 'kamera HP' : 'kamera langsung'), 22, H - band + 101);
+    ctx.fillText((App.company.companyName || '') + ' · sesi ' + shot.nonce.slice(0, 8) + ' · ' + (SOURCE_LABEL[shot.source] || 'kamera langsung'), 22, H - band + 101);
   },
 
   /** Foto akhir yang dikirim: salinan kanvas asli + cap terbaru. */
@@ -476,18 +483,26 @@ const Att = {
     return c.toDataURL('image/jpeg', 0.82);
   },
 
-  /** Membuka kamera HP. Harus dipanggil langsung dari klik (bukan setelah await). */
-  openFilePicker() {
+  /**
+   * Membuka kamera HP (kind 'kamera') atau galeri (kind 'galeri').
+   * Harus dipanggil langsung dari klik (bukan setelah await).
+   */
+  openFilePicker(kind) {
     if (!this.actionable()) return;
-    if (!this.uploadAllowed()) { UI.toast('Admin menonaktifkan foto dari kamera HP. Hubungi Admin.', 'danger'); return; }
+    if (!this.uploadAllowed()) { UI.toast('Admin menonaktifkan foto dari kamera HP dan galeri. Hubungi Admin.', 'danger'); return; }
     const input = $('#att-file');
-    input.setAttribute('capture', this.target === 'work' ? 'environment' : 'user');
+    this.pickSource = kind === 'galeri' ? 'galeri' : 'lampiran';
+    // Tanpa atribut capture, HP menawarkan galeri; dengan capture, HP langsung membuka kamera.
+    if (this.pickSource === 'galeri') input.removeAttribute('capture');
+    else input.setAttribute('capture', this.target === 'work' ? 'environment' : 'user');
     input.value = '';
     input.click();
   },
 
   async onFile(file) {
     if (!file || !this.alive()) return;
+    const source = this.pickSource || 'lampiran';
+    this.stopCamera();
     if (file.type && !/^image\//.test(file.type)) { UI.toast('File harus berupa foto.', 'warning'); return; }
     const target = this.target;
     this.cam.status = 'processing';
@@ -508,7 +523,7 @@ const Att = {
         return;
       }
       const faceCheck = target === 'selfie' ? await this.faceCheck(canvas) : 'off';
-      this.photos[target] = { canvas: canvas, previewUrl: canvas.toDataURL('image/jpeg', 0.8), takenAt: Clock.now(), faceCheck: faceCheck, nonce: nonce.value, source: 'lampiran', origHash: origHash, ageSec: ageSec };
+      this.photos[target] = { canvas: canvas, previewUrl: canvas.toDataURL('image/jpeg', 0.8), takenAt: Clock.now(), faceCheck: faceCheck, nonce: nonce.value, source: source, origHash: origHash, ageSec: ageSec };
       this.afterShot(target);
     } catch (err) {
       UI.toast(err && err.message ? err.message : 'Foto tidak dapat diproses. Coba ambil ulang.', 'danger');
@@ -580,7 +595,8 @@ const Att = {
     this.cam.status = 'idle';
     this.renderCamera();
     this.renderReqs();
-    if (this.cam.mode === 'upload') this.openFilePicker(); else this.startCamera();
+    // Mode kamera HP: tampilkan lagi pilihan "Foto langsung" / "Pilih dari galeri".
+    if (this.cam.mode !== 'upload') this.startCamera();
   },
 
   renderCamera() {
@@ -591,9 +607,10 @@ const Att = {
     const video = $('#att-video'), img = $('#att-photo'), guide = $('#att-guide'), state = $('#att-camstate'), badge = $('#att-badge'), ctl = $('#att-camctl');
     const work = this.needsWork();
     $('#att-cam-title').textContent = work ? 'Foto check-out' : 'Foto selfie';
+    const from = this.uploadAllowed() ? 'dari kamera atau galeri' : 'langsung dari kamera';
     $('#att-cam-sub').textContent = target === 'work'
-      ? 'Foto hasil pekerjaan hari ini langsung dari kamera (mis. paket yang dikemas, rak yang dirapikan).'
-      : 'Ambil langsung dari kamera. Wajah harus terlihat jelas.';
+      ? 'Foto hasil pekerjaan hari ini ' + from + ' (mis. paket yang dikemas, rak yang dirapikan).'
+      : 'Ambil ' + from + '. Wajah harus terlihat jelas.';
     const tabs = $('#att-shots');
     tabs.classList.toggle('hidden', !work || !this.actionable());
     if (work) {
@@ -609,24 +626,27 @@ const Att = {
     if (photo) img.src = photo.previewUrl; else img.removeAttribute('src');
     const upload = this.cam.mode === 'upload';
     let s = '';
-    if (photo) s = '';
+    if (photo || st === 'live') s = '';
     else if (this.mode === 'done') s = icon('checkCircle') + '<div class="t">Absensi hari ini selesai</div><p>Kamera tidak diperlukan. Sampai jumpa di hari kerja berikutnya.</p>';
     else if (!this.actionable()) s = icon('clock') + '<div class="t">Belum dapat melakukan absensi</div><p>' + esc(this.state ? this.state.message : '') + '</p>';
     else if (st === 'processing') s = '<span class="spinner" style="width:28px;height:28px;color:#94a3b8"></span><div class="t">Memproses foto…</div>';
     else if (upload && !this.uploadAllowed()) s = icon('cameraOff') + '<div class="t">Kamera tidak dapat dipakai</div><p>Browser membatasi kamera langsung di aplikasi ini dan Admin menonaktifkan foto dari kamera HP. Hubungi Admin.</p>';
-    else if (upload) s = icon('camera') + '<div class="t">' + (target === 'work' ? 'Foto hasil kerja' : 'Foto selfie') + '</div><p>Tekan tombol di bawah untuk membuka kamera HP. Jam server dan lokasi GPS dicap otomatis pada foto dan tidak dapat diubah.</p>' +
-      '<button class="btn btn-accent" data-cam="file">' + icon('camera') + 'Buka kamera</button>';
+    else if (upload) s = icon('camera') + '<div class="t">' + (target === 'work' ? 'Foto hasil kerja' : 'Foto selfie') + '</div><p>Potret langsung atau pilih foto dari galeri. Jam server dan lokasi GPS dicap otomatis pada foto dan tidak dapat diubah.</p>' +
+      '<div class="cam-pick"><button class="btn btn-accent" data-cam="file">' + icon('camera') + 'Foto langsung</button>' +
+      '<button class="btn btn-outline" data-cam="gallery">' + icon('image') + 'Pilih dari galeri</button></div>';
     else if (st === 'starting') s = '<span class="spinner" style="width:28px;height:28px;color:#94a3b8"></span><div class="t">Meminta izin kamera…</div><p>Pilih "Izinkan" saat browser meminta akses kamera.</p>';
     else if (st === 'error') s = icon('cameraOff') + '<div class="t">' + esc(this.cam.error.title) + '</div><p>' + esc(this.cam.error.text) + '</p><button class="btn btn-primary" data-cam="start">' + icon('refresh') + 'Coba lagi</button>';
-    else s = icon('camera') + '<div class="t">Kamera belum aktif</div><p>' + (target === 'work' ? 'Aktifkan kamera untuk memotret hasil pekerjaan Anda.' : 'Izinkan akses kamera untuk mengambil foto selfie absensi.') + '</p><button class="btn btn-primary" data-cam="start">' + icon('camera') + 'Aktifkan kamera</button>';
+    else s = icon('camera') + '<div class="t">Kamera belum aktif</div><p>' + (target === 'work' ? 'Aktifkan kamera untuk memotret hasil pekerjaan Anda.' : 'Izinkan akses kamera untuk mengambil foto selfie absensi.') + '</p><div class="cam-pick"><button class="btn btn-primary" data-cam="start">' + icon('camera') + 'Aktifkan kamera</button>' +
+      (this.uploadAllowed() ? '<button class="btn btn-outline" data-cam="gallery">' + icon('image') + 'Pilih dari galeri</button>' : '') + '</div>';
     state.innerHTML = s;
     state.classList.toggle('hidden', !s);
     if (st === 'live') { badge.innerHTML = '<span class="live"></span>Kamera aktif'; badge.classList.remove('hidden'); }
-    else if (photo) { badge.innerHTML = icon('check', 'ic-sm') + esc(SHOT_LABEL[target]) + ' ' + esc(Clock.timeStr(photo.takenAt)) + (photo.source === 'lampiran' ? ' · kamera HP' : ''); badge.classList.remove('hidden'); }
+    else if (photo) { badge.innerHTML = icon('check', 'ic-sm') + esc(SHOT_LABEL[target]) + ' ' + esc(Clock.timeStr(photo.takenAt)) + (SOURCE_LABEL[photo.source] ? ' · ' + SOURCE_LABEL[photo.source] : ''); badge.classList.remove('hidden'); }
     else badge.classList.add('hidden');
     if (st === 'live') {
       ctl.innerHTML = '<button class="btn btn-ghost btn-sm" data-cam="stop">' + icon('cameraOff', 'ic-sm') + 'Matikan</button>' +
-        '<button class="shutter" data-cam="shoot" aria-label="Ambil ' + esc(SHOT_LABEL[target].toLowerCase()) + '">' + icon('camera', 'ic-lg') + '</button><span style="width:86px"></span>';
+        '<button class="shutter" data-cam="shoot" aria-label="Ambil ' + esc(SHOT_LABEL[target].toLowerCase()) + '">' + icon('camera', 'ic-lg') + '</button>' +
+        (this.uploadAllowed() ? '<button class="btn btn-ghost btn-sm" data-cam="gallery">' + icon('image', 'ic-sm') + 'Galeri</button>' : '<span style="width:86px"></span>');
     } else if (photo && this.actionable()) {
       ctl.innerHTML = '<button class="btn btn-outline" data-cam="retake">' + icon('refresh') + 'Ulangi ' + esc(SHOT_LABEL[target].toLowerCase()) + '</button>' +
         (work && target === 'selfie' && !this.photos.work ? '<button class="btn btn-primary" data-shot="work">Lanjut foto hasil kerja</button>' : '');

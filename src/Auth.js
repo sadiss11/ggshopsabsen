@@ -70,14 +70,20 @@ function pwFingerprint_(hash) {
 }
 
 function sessionExpired_(s, nowMs) {
-  return !s || nowMs - Number(s.c) > LIMITS_.SESSION_MAX_AGE_MS || nowMs - Number(s.s) > LIMITS_.SESSION_IDLE_MS;
+  if (!s) return true;
+  const maxAge = s.r ? LIMITS_.SESSION_REMEMBER_MAX_AGE_MS : LIMITS_.SESSION_MAX_AGE_MS;
+  const idle = s.r ? LIMITS_.SESSION_REMEMBER_IDLE_MS : LIMITS_.SESSION_IDLE_MS;
+  return nowMs - Number(s.c) > maxAge || nowMs - Number(s.s) > idle;
 }
 
-function createSession_(user) {
+/** remember = "Ingat saya": sesi panjang (lihat LIMITS_.SESSION_REMEMBER_*). */
+function createSession_(user, remember) {
   const token = uid_() + uid_();
   const now = Date.now();
   const props = PropertiesService.getScriptProperties();
-  props.setProperty('sess_' + sha256Hex_(token), JSON.stringify({ u: user.userId, c: now, s: now, h: pwFingerprint_(user.passwordHash) }));
+  const rec = { u: user.userId, c: now, s: now, h: pwFingerprint_(user.passwordHash) };
+  if (remember) rec.r = 1;
+  props.setProperty('sess_' + sha256Hex_(token), JSON.stringify(rec));
   purgeSessions_(now);
   return token;
 }
@@ -108,7 +114,7 @@ function sessionUser_(token) {
   const user = findBy_('Users', 'userId', s.u);
   if (!user || user.status !== 'Aktif' || s.h !== pwFingerprint_(user.passwordHash)) { props.deleteProperty(key); return null; }
   if (now - Number(s.s) > 10 * 60e3) { s.s = now; props.setProperty(key, JSON.stringify(s)); }
-  return { user: withEffectiveRole_(user), key: key };
+  return { user: withEffectiveRole_(user), key: key, remember: !!s.r };
 }
 
 /**
@@ -179,7 +185,7 @@ function authLogin_(ctx, p) {
   ctx.user = withEffectiveRole_(user);
   ctx.employee = user.employeeId ? findBy_('Employees', 'employeeId', user.employeeId) : null;
   audit_(ctx, 'LOGIN', 'User', user.userId, 'SUCCESS');
-  const token = createSession_(user);
+  const token = createSession_(user, p.remember === true);
   return Object.assign({ token: token }, user.mustChangePassword ? { user: publicUser_(user) } : bootBundle_(ctx, p.page));
 }
 
@@ -254,7 +260,7 @@ function authChangePassword_(ctx, p) {
   PropertiesService.getScriptProperties().deleteProperty(ctx.sessKey);
   const updated = freshById_('Users', 'userId', ctx.user.userId);
   audit_(ctx, 'CHANGE_PASSWORD', 'User', ctx.user.userId, 'SUCCESS');
-  return { token: createSession_(updated), user: publicUser_(updated) };
+  return { token: createSession_(updated, ctx.sessRemember), user: publicUser_(updated) };
 }
 
 /* ---------- Otorisasi ---------- */

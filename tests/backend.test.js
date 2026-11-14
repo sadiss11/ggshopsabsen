@@ -685,3 +685,29 @@ test('X32 doPost (dipakai versi Vercel) memberi hasil & pemeriksaan yang sama de
   const login = post({ action: 'auth.login', payload: { username: 'budi', password: 'Rahasiabudi2026' } });
   assert.ok(login.ok && login.data.token);
 });
+
+test('X33 "Ingat saya": sesi bertahan berhari-hari, tetapi tetap gugur saat password diganti atau akun dinonaktifkan', () => {
+  const { env, tokens, ids } = bootstrap({ now: wib(DAY, '07:00') });
+  const keep = must(env.api('auth.login', { username: 'budi', password: 'Rahasiabudi2026', remember: true })).token;
+  const short = must(env.api('auth.login', { username: 'siti', password: 'Rahasiasiti2026' })).token;
+  env.advance(26 * 3600e3); // besok pagi, lewat batas 16 jam
+  assert.equal(must(env.api('auth.me', {}, keep)).user.username, 'budi', 'karyawan dengan "Ingat saya" tidak perlu login ulang');
+  assert.equal(env.api('auth.me', {}, short).code, 'AUTH_REQUIRED', 'tanpa "Ingat saya" tetap 16 jam');
+  must(attend(env, keep, 'checkin', INSIDE), 'absen keesokan hari tanpa login ulang');
+  env.advance(13 * 86400e3);
+  assert.equal(must(env.api('auth.me', {}, keep)).user.username, 'budi', 'dipakai tiap hari: tetap masuk');
+  env.advance(15 * 86400e3);
+  assert.equal(env.api('auth.me', {}, keep).code, 'AUTH_REQUIRED', 'tidak dipakai lebih dari 14 hari: gugur');
+  // Ganti password menggugurkan sesi lama; sesi baru tetap "Ingat saya".
+  const keep2 = must(env.api('auth.login', { username: 'budi', password: 'Rahasiabudi2026', remember: true })).token;
+  const changed = must(env.api('auth.changePassword', { oldPassword: 'Rahasiabudi2026', newPassword: 'BaruSekali2026' }, keep2)).token;
+  assert.equal(env.api('auth.me', {}, keep2).code, 'AUTH_REQUIRED');
+  env.advance(3 * 86400e3);
+  assert.equal(must(env.api('auth.me', {}, changed)).user.username, 'budi', 'sesi setelah ganti password tetap panjang');
+  // Akun dinonaktifkan: langsung keluar.
+  const admin = relogin(env, 'admin');
+  const uid = env.table('Users').find(u => u.username === 'budi').userId;
+  must(env.api('users.save', { userId: uid, role: 'karyawan', status: 'Nonaktif', employeeId: ids.budi }, admin));
+  assert.equal(env.api('auth.me', {}, changed).code, 'AUTH_REQUIRED');
+  assert.ok(tokens);
+});

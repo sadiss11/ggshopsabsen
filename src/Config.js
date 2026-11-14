@@ -22,6 +22,10 @@ const PHOTO_ACCESS_ = { admin: 'all', hr: 'all', karyawan: 'own' };
 const LIMITS_ = {
   SESSION_IDLE_MS: 12 * 3600e3,    // sesi gugur bila tidak dipakai 12 jam
   SESSION_MAX_AGE_MS: 16 * 3600e3, // umur absolut sesi (cukup untuk satu hari kerja + lembur)
+  // "Ingat saya": karyawan tidak perlu login ulang setiap pagi. Ganti password, akun nonaktif,
+  // atau akun dihapus tetap langsung menggugurkan sesi.
+  SESSION_REMEMBER_IDLE_MS: 14 * 86400e3,
+  SESSION_REMEMBER_MAX_AGE_MS: 30 * 86400e3,
   LOGIN_MAX_FAIL: 5,
   LOGIN_LOCK_SEC: 900,
   NONCE_TTL_SEC: 600,              // foto harus dikirim maks. 10 menit setelah sesi kamera dibuka (check-out: 2 foto + laporan)

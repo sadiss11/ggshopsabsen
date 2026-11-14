@@ -65,33 +65,35 @@ function jpegSize_(b) {
 /**
  * Asal foto. Web app Apps Script berjalan di iframe Google yang tidak memberi izin
  * kamera (getUserMedia selalu ditolak), sehingga foto biasanya diambil lewat
- * kamera HP melalui input file ("lampiran"). Untuk lampiran, browser juga
+ * kamera HP melalui input file ("lampiran") atau dipilih dari galeri ("galeri").
+ * Untuk lampiran & galeri, browser juga
  * mengirim hash file asli dan umur file; keduanya data dari perangkat, dipakai
  * sebagai penanda dan pencegah pemakaian ulang, bukan bukti.
  */
 function photoMeta_(source, origHash, ageSec) {
   const age = Number(ageSec);
   return {
-    source: source === 'lampiran' ? 'lampiran' : 'kamera',
+    source: source === 'lampiran' || source === 'galeri' ? source : 'kamera',
     origHash: /^[a-f0-9]{64}$/.test(String(origHash || '')) ? String(origHash) : '',
     ageSec: ageSec !== undefined && ageSec !== null && ageSec !== '' && isFinite(age) && age >= 0 ? Math.round(age) : null,
   };
 }
 
 function assertPhotoSourceAllowed_(meta) {
-  if (meta.source === 'lampiran' && !getConfig_().allowPhotoUpload) {
-    throw appError_('Admin mewajibkan foto langsung dari kamera aplikasi, sehingga lampiran foto tidak diterima.', 'PHOTO_UPLOAD_DISABLED');
+  if ((meta.source === 'lampiran' || meta.source === 'galeri') && !getConfig_().allowPhotoUpload) {
+    throw appError_('Admin mewajibkan foto langsung dari kamera aplikasi, sehingga foto dari kamera HP atau galeri tidak diterima.', 'PHOTO_UPLOAD_DISABLED');
   }
 }
 
 function photoFlags_(meta) {
   const flags = [];
   if (meta.source === 'lampiran') flags.push('LAMPIRAN');
+  if (meta.source === 'galeri') flags.push('GALERI');
   if (meta.ageSec !== null && meta.ageSec > LIMITS_.PHOTO_MAX_AGE_SEC) flags.push('FOTO_LAMA');
   return flags;
 }
 
-/** Hash yang disimpan & dicek duplikatnya: hash file asli untuk lampiran (cap waktu membuat file terkirim selalu berbeda). */
+/** Hash yang disimpan & dicek duplikatnya: hash file asli untuk lampiran & galeri (cap waktu membuat file terkirim selalu berbeda). */
 function storedPhotoHash_(photo, meta) {
   return meta.origHash || photo.hash;
 }

@@ -72,12 +72,15 @@ async function setup(o = {}) {
   });
 }
 
-async function login(t, username, password) {
+// Default tanpa "Ingat saya" (token per tab), agar beberapa akun bisa login di tab berbeda dalam satu browser uji.
+async function login(t, username, password, opts) {
   await t.page.goto(t.url, { waitUntil: 'domcontentloaded' });
   await t.page.waitForSelector('#login-form');
   await t.page.waitForFunction(() => document.activeElement && document.activeElement.name === 'username');
   await t.page.type('[name=username]', username);
   await t.page.type('[name=password]', password);
+  const remember = !!(opts && opts.remember);
+  await t.page.$eval('[name=remember]', (c, r) => { c.checked = r; }, remember);
   await t.page.click('#login-form button[type=submit]');
   await t.page.waitForSelector('.shell', { timeout: 15000 });
 }
@@ -814,4 +817,119 @@ test('E21 versi Vercel: HP yang masih menyimpan versi lama otomatis pindah ke ve
     await p.reload();
     await p.waitForFunction(() => document.getElementById('v').textContent === 'VERSI-TERBARU', { timeout: 10000 });
   } finally { await browser.close(); srv.close(); }
+});
+
+test('E22 keluhan "absen foto selalu logout": login kemarin dengan Ingat saya → besok pagi buka aplikasi, foto, absen tanpa terlempar ke login', { skip: SKIP }, async () => {
+  const t = await setup({ base: wib(DAY, '07:50') });
+  try {
+    await t.page.goto(t.url, { waitUntil: 'domcontentloaded' });
+    await t.page.waitForSelector('#login-form');
+    assert.equal(await t.page.$eval('[name=remember]', c => c.checked), true, '"Ingat saya" dicentang otomatis');
+    await login(t, 'budi', 'Rahasiabudi2026', { remember: true });
+    await openAbsensi(t);
+    await waitReq(t.page, 'location', 'ok');
+    await takePhoto(t.page);
+    await submitAttendance(t.page, 'Check-in berhasil');
+    // Pulang sore.
+    t.setSkew(wib(DAY, '17:05') - wib(DAY, '07:50'));
+    await t.page.reload({ waitUntil: 'domcontentloaded' });
+    await openAbsensi(t);
+    await waitReq(t.page, 'location', 'ok');
+    await takePhoto(t.page);
+    await takeWorkPhoto(t.page);
+    await fillWorkReport(t.page, 'Merapikan stok gudang');
+    await submitAttendance(t.page, 'Check-out berhasil');
+    // Keesokan paginya: aplikasi dibuka lagi (lebih dari 16 jam sejak login).
+    // Halaman Absen dibiarkan terbuka semalaman: lewat tengah malam statusnya harus berganti sendiri.
+    t.setSkew(wib('2026-10-27', '07:45') - wib(DAY, '07:50'));
+    await t.page.evaluate(() => Clock.sync());
+    await t.page.waitForFunction(() => /Check-in/.test(document.getElementById('att-submit').textContent), { timeout: 15000 });
+    // Lalu aplikasi dibuka ulang keesokan pagi (lebih dari 16 jam sejak login).
+    await t.page.reload({ waitUntil: 'domcontentloaded' });
+    await t.page.waitForSelector('#att-reqs .req', { timeout: 15000 });
+    await waitReq(t.page, 'location', 'ok');
+    await takePhoto(t.page);
+    await submitAttendance(t.page, 'Check-in berhasil');
+    assert.equal(await t.page.$('#login-form'), null, 'tidak terlempar ke halaman login');
+    assert.equal(t.env.table('Attendance').filter(r => r.employeeId === t.ids.budi).length, 2);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
+});
+
+/** Pilih foto lewat tombol galeri (pemilih file tanpa atribut capture). */
+async function pickFromGallery(page, scope, photo, reqKey) {
+  await scope.waitForSelector('[data-cam="gallery"]', { visible: true, timeout: 15000 });
+  await scope.$eval('[data-cam="gallery"]', el => el.scrollIntoView({ block: 'center' }));
+  const [chooser] = await Promise.all([page.waitForFileChooser({ timeout: 10000 }), scope.click('[data-cam="gallery"]')]);
+  assert.equal(await scope.$eval('#att-file', i => i.hasAttribute('capture')), false, 'galeri: tanpa capture, HP menawarkan galeri');
+  await chooser.accept([photo.file]);
+  await waitReq(scope, reqKey, 'ok');
+}
+
+test('E23 pilih foto dari galeri: tombol "Foto langsung" & "Pilih dari galeri" di iframe Google, tombol Galeri di samping shutter, check-in & check-out dari galeri ditandai GALERI', { skip: SKIP }, async () => {
+  const t = await setup();
+  try {
+    const rate = t.env.api('rates.save', { nama: 'Packing pesanan', tarif: 50000 }, t.tokens.rina).data;
+    // 1) Kamera langsung aktif (Vercel): ada tombol Galeri di samping shutter.
+    await login(t, 'budi', 'Rahasiabudi2026');
+    await openAbsensi(t);
+    await waitReq(t.page, 'location', 'ok');
+    await waitReq(t.page, 'camera', 'ok');
+    await t.page.waitForFunction(() => { const v = document.getElementById('att-video'); return v && v.videoWidth > 0; }, { timeout: 15000 });
+    assert.ok(await t.page.$('#att-camctl [data-cam="shoot"]') && await t.page.$('#att-camctl [data-cam="gallery"]'), 'shutter & Galeri berdampingan');
+    assert.equal(await t.page.$eval('#att-camstate', el => el.classList.contains('hidden')), true, 'tulisan "Kamera belum aktif" tidak menutupi video yang menyala');
+    await t.page.$eval('#att-camctl', el => el.scrollIntoView({ block: 'end' }));
+    await sleep(200);
+    await t.page.screenshot({ path: path.join(SHOTS, 'mobile-galeri-live.png') });
+    const selfieIn = await makePhotoFile(t.page, 'e23-in', 71);
+    await pickFromGallery(t.page, t.page, selfieIn, 'photo');
+    assert.match(await t.page.$eval('#att-badge', b => b.innerText), /galeri/i);
+    assert.equal(await t.page.evaluate(() => Att.cam.stream), null, 'kamera langsung dimatikan setelah memilih dari galeri');
+    await submitAttendance(t.page, 'Check-in berhasil');
+    let row = t.env.table('Attendance')[0];
+    assert.equal(row.checkInPhotoHash, selfieIn.hash);
+    assert.ok(row.flags.split(',').includes('IN:GALERI'), row.flags);
+
+    // 2) Iframe Google (kamera langsung diblokir): dua pilihan, check-out selfie & foto kerja dari galeri.
+    t.setSkew(wib(DAY, '17:05') - wib(DAY, '07:50'));
+    await t.page.evaluate(() => { try { localStorage.clear(); sessionStorage.clear(); } catch (e) { /* abaikan */ } });
+    await t.page.goto(t.url + '__frame', { waitUntil: 'domcontentloaded' });
+    const frame = await (await t.page.waitForSelector('iframe')).contentFrame();
+    await frame.waitForSelector('#login-form');
+    await frame.waitForFunction(() => document.activeElement && document.activeElement.name === 'username');
+    await frame.type('[name=username]', 'budi');
+    await frame.type('[name=password]', 'Rahasiabudi2026');
+    await frame.click('#login-form button[type=submit]');
+    await frame.waitForSelector('.shell', { timeout: 15000 });
+    await frame.evaluate(() => { location.hash = '#/absensi'; });
+    await frame.waitForSelector('#att-reqs .req', { timeout: 15000 });
+    await waitReq(frame, 'location', 'ok');
+    await frame.waitForSelector('#att-camstate [data-cam="file"]', { visible: true, timeout: 15000 });
+    const labels = await frame.$$eval('#att-camstate .btn', bs => bs.map(b => b.innerText.trim()));
+    assert.deepEqual(labels, ['Foto langsung', 'Pilih dari galeri']);
+    await frame.$eval('#att-camstate', el => el.scrollIntoView({ block: 'start' }));
+    await sleep(200);
+    await t.page.screenshot({ path: path.join(SHOTS, 'mobile-galeri-pilihan.png') });
+    // Membatalkan "Foto langsung" tidak mengubah apa pun; capture tetap dipasang untuk kamera.
+    await frame.$eval('[data-cam="file"]', el => el.scrollIntoView({ block: 'center' }));
+    const [cancel] = await Promise.all([t.page.waitForFileChooser({ timeout: 10000 }), frame.click('[data-cam="file"]')]);
+    assert.equal(await frame.$eval('#att-file', i => i.getAttribute('capture')), 'user');
+    await cancel.cancel();
+    const selfieOut = await makePhotoFile(frame, 'e23-out', 72);
+    await pickFromGallery(t.page, frame, selfieOut, 'photo');
+    await frame.waitForFunction(() => document.querySelector('[data-shot="work"]').classList.contains('is-active'), { timeout: 10000 });
+    // Foto check-in pagi (file yang sama) ditolak sebagai foto hasil kerja oleh server; pakai foto lain.
+    const work = await makePhotoFile(frame, 'e23-kerja', 73);
+    await pickFromGallery(t.page, frame, work, 'workPhoto');
+    await frame.$eval('.rate-option input[value="' + rate.rateId + '"]', el => el.scrollIntoView({ block: 'center' }));
+    await frame.click('.rate-option input[value="' + rate.rateId + '"]');
+    await frame.type('#att-work-note', 'Packing 30 pesanan');
+    await waitReq(frame, 'workReport', 'ok');
+    await submitAttendance(frame, 'Check-out berhasil');
+    row = t.env.table('Attendance')[0];
+    assert.ok(row.flags.split(',').includes('OUT:GALERI'), row.flags);
+    assert.equal(t.env.table('WorkReports')[0].flags, 'GALERI');
+    assert.equal(t.env.table('WorkReports')[0].photoHash, work.hash);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
 });

@@ -140,6 +140,7 @@ function api(action, payload, token) {
       if (!s) throw appError_('Sesi Anda telah berakhir. Silakan masuk kembali.', 'AUTH_REQUIRED');
       ctx.user = s.user;
       ctx.sessKey = s.key;
+      ctx.sessRemember = s.remember;
       if (ctx.user.mustChangePassword && !route.pwChange) {
         throw appError_('Anda wajib mengganti password sementara terlebih dahulu.', 'PASSWORD_CHANGE_REQUIRED');
       }

@@ -328,7 +328,7 @@ Laporan jobdesk yang dibuat server saat check-out. Satu baris per jobdesk yang d
 | `diverifikasiAt` | dt | Waktu verifikasi (UTC) | |
 | `catatanVerifikasi` | s | Alasan penolakan atau catatan | |
 | `createdAt`, `updatedAt` | dt | Waktu dibuat/diubah (UTC) | |
-| `flags` | s | Penanda foto hasil kerja, dipisah koma: `LAMPIRAN`, `FOTO_LAMA` | `LAMPIRAN` |
+| `flags` | s | Penanda foto hasil kerja, dipisah koma: `LAMPIRAN`, `GALERI`, `FOTO_LAMA` | `LAMPIRAN` |
 
 Gaji jobdesk pada suatu rentang = jumlah `tarif` baris berstatus `Disetujui` dengan `workDate` di rentang itu. Kedua sheet dibuat otomatis saat pertama dipakai.
 
@@ -404,8 +404,8 @@ Semua nilai berikut peka huruf besar-kecil.
 | `WorkLocations.status`, `WorkSchedules.status` | `Aktif`, `Nonaktif` | Nilai apa pun selain `Nonaktif` dianggap aktif |
 | `Attendance.status` | `Hadir`, `Terlambat`, `Izin`, `Sakit`, `Cuti`, `Dinas Luar`, `Alpha` | `Hadir`/`Terlambat` diisi otomatis; nilai lain berasal dari koreksi HR |
 | `Attendance.checkOutStatus` | `Normal`, `Pulang Cepat`, atau kosong | |
-| `Attendance.flags` | `ACC_SUSPICIOUS`, `EXACT_OFFICE_COORD`, `LOW_PRECISION`, `IMPOSSIBLE_TRAVEL`, `FACE_NOT_DETECTED`, `LAMPIRAN`, `FOTO_LAMA` | Masing-masing berawalan `IN:` atau `OUT:` |
-| `WorkReports.flags` | `LAMPIRAN`, `FOTO_LAMA` | Tanpa awalan |
+| `Attendance.flags` | `ACC_SUSPICIOUS`, `EXACT_OFFICE_COORD`, `LOW_PRECISION`, `IMPOSSIBLE_TRAVEL`, `FACE_NOT_DETECTED`, `LAMPIRAN`, `GALERI`, `FOTO_LAMA` | Masing-masing berawalan `IN:` atau `OUT:` |
+| `WorkReports.flags` | `LAMPIRAN`, `GALERI`, `FOTO_LAMA` | Tanpa awalan |
 | `BonusReports.status` | `Menunggu`, `Disetujui`, `Ditolak` | Laporan Ditolak boleh dikirim ulang untuk tanggal & jenis paket yang sama |
 | `BonusReports.flags` | `TANPA_ABSEN` | |
 | `BonusSchemes.status` | `Aktif`, `Nonaktif` | Jenis paket yang sudah dilaporkan tidak dihapus, hanya dinonaktifkan |

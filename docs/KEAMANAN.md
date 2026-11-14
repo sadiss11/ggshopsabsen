@@ -32,7 +32,7 @@ Kontrol utama:
 - Waktu resmi absensi adalah waktu server saat permintaan diterima. Jam perangkat diabaikan.
 - Jarak ke kantor dan aturan jadwal dihitung ulang di server. Status "di dalam kantor" dari browser diabaikan.
 - Foto absensi terikat pada sesi kamera sekali pakai (10 menit), divalidasi formatnya, dicek agar tidak dipakai ulang (hash SHA-256), disimpan di folder Drive privat, dan hanya dapat dilihat lewat server sesuai role.
-- Google memblokir kamera langsung di web app Apps Script. Karena itu foto diambil lewat kamera HP (input file), lalu aplikasi mencap jam server dan lokasi GPS terverifikasi pada foto. Foto seperti ini ditandai `LAMPIRAN` untuk HR. Admin dapat menonaktifkannya. Lihat [5.6](#56-anti-manipulasi-foto) dan [9.2](#92-foto-dapat-dipalsukan).
+- Google memblokir kamera langsung di web app Apps Script. Karena itu foto diambil lewat kamera HP (input file), lalu aplikasi mencap jam server dan lokasi GPS terverifikasi pada foto. Foto seperti ini ditandai `LAMPIRAN` untuk HR. Karyawan juga dapat memilih foto dari galeri HP; foto itu ditandai `GALERI`, dan bila file-nya berumur lebih dari 15 menit juga `FOTO_LAMA`. Admin dapat menonaktifkan keduanya sekaligus. Lihat [5.6](#56-anti-manipulasi-foto) dan [9.2](#92-foto-dapat-dipalsukan).
 - Transaksi tulis diserialkan dengan Script Lock, lalu dievaluasi ulang di dalam lock.
 - Aktivitas penting dicatat di audit log.
 
@@ -86,8 +86,9 @@ Catatan jujur: 1000 iterasi jauh di bawah rekomendasi industri saat ini untuk PB
 - **Token:** 64 karakter heksadesimal acak (dari dua UUID acak), diberikan ke browser saat login dan dikirim pada setiap panggilan `api()`.
 - **Penyimpanan:** server hanya menyimpan hash SHA-256 token sebagai Script Property `sess_<hash>`, berisi `userId`, waktu dibuat, waktu terakhir dipakai, dan sidik jari hash password. Isi Script Properties tidak dapat dipakai untuk membuat ulang token.
 - **Sesi gugur jika:**
-  - tidak dipakai selama **12 jam** (waktu terakhir dipakai diperbarui paling sering setiap 10 menit),
-  - sudah berumur **16 jam** sejak login, berapa pun aktivitasnya,
+  - tanpa "Ingat saya": tidak dipakai selama **12 jam**, atau sudah berumur **16 jam** sejak login,
+  - dengan "Ingat saya" (dicentang otomatis di halaman login): tidak dipakai selama **14 hari**, atau sudah berumur **30 hari** sejak login. Dibuat karena sesi 16 jam membuat karyawan terlempar ke halaman login setiap pagi tepat saat hendak absen (November 2026; uji X33, E22),
+  - (waktu terakhir dipakai diperbarui paling sering setiap 10 menit)
   - password berubah (diganti sendiri, direset Admin, atau lewat `resetAdminPassword()`),
   - status akun bukan `Aktif`, atau akun dihapus,
   - pengguna logout. Logout hanya mengakhiri sesi di perangkat tersebut.
@@ -97,7 +98,9 @@ Catatan jujur: 1000 iterasi jauh di bawah rekomendasi industri saat ini untuk PB
 - Sesi kedaluwarsa dibersihkan setiap kali ada login berhasil, karena kapasitas Script Properties dibatasi 500 KB.
 - Sesi tidak disimpan di CacheService karena masa simpan maksimalnya 6 jam, lebih pendek dari jarak antara check-in pagi dan check-out sore.
 
-Siapa pun yang memperoleh token (misalnya di perangkat bersama yang tidak di-logout) dapat memakai sesi itu sampai kedaluwarsa. Minta karyawan selalu logout di perangkat bersama.
+Siapa pun yang memperoleh token (misalnya di perangkat bersama yang tidak di-logout) dapat memakai sesi itu sampai kedaluwarsa. Minta karyawan selalu logout di perangkat bersama. Di perangkat bersama, jangan centang "Ingat saya".
+
+Bila browser memblokir penyimpanan lokal (mis. aplikasi dibuka lewat link Google di dalam iframe pihak ketiga pada iPhone), status login hanya tersimpan di memori dan hilang saat halaman dimuat ulang, misalnya setelah memotret dengan kamera HP. Halaman login menampilkan peringatan dan menyarankan link Vercel.
 
 ### 3.4 Pembatasan percobaan login
 
@@ -247,6 +250,7 @@ Flags **tidak menolak** absensi. Flags disimpan di kolom `Attendance.flags` deng
 | `IMPOSSIBLE_TRAVEL` | Berpindah lebih dari 2 km dari transaksi sebelumnya dengan kecepatan lebih dari 250 km/jam | Lokasi "melompat". Check-out dibandingkan dengan check-in-nya; check-in dibandingkan dengan check-out terakhir (hari ini atau kemarin). Selisih waktu minimal dihitung 1 menit. |
 | `FACE_NOT_DETECTED` | Browser melaporkan wajah tidak terdeteksi | Hasil dari browser, bukan dihitung server; mudah dipalsukan |
 | `LAMPIRAN` | Foto dikirim dari kamera HP (input file), bukan dari kamera langsung di aplikasi | Normal di web app Apps Script karena Google memblokir kamera langsung. Penanda ini mengingatkan HR bahwa jalur ini lebih lemah (lihat 9.2). |
+| `GALERI` | Karyawan memilih foto yang sudah ada di galeri HP, bukan memotret saat absen | Jalur paling lemah: foto bisa diambil di waktu atau tempat lain. Jam server & lokasi GPS saat absen tetap dicap dan divalidasi, file yang sama tetap ditolak bila dipakai ulang, tetapi HR perlu memeriksa isi fotonya (lihat 9.2). |
 | `FOTO_LAMA` | Umur file foto lebih dari 15 menit saat dikirim | Kemungkinan foto lama atau foto dari galeri. Umur dihitung di perangkat dari waktu file dibuat, jadi dapat dipalsukan. |
 
 Penanda yang sama berlaku untuk foto hasil kerja dan disimpan di kolom `WorkReports.flags` (tanpa awalan). Halaman **Gaji → Verifikasi** menampilkannya di bawah nama jobdesk.
@@ -279,7 +283,7 @@ Yang tetap dihitung di server: larangan absen ganda, cuti/izin yang sudah disetu
 8. **Mode kamera HP (lampiran).** Web app Apps Script ditampilkan Google di dalam iframe yang tidak memberi izin `camera` (daftar izin iframe Google hanya memuat geolocation, clipboard, fullscreen, dan sejenisnya). Akibatnya `getUserMedia` selalu ditolak di semua perangkat, dan ini tidak dapat diubah dari kode aplikasi. Aplikasi lalu memakai `<input type="file" accept="image/*" capture>`, yang di Android dan iPhone membuka kamera bawaan HP:
    - foto dipotong ke 720 × 960 lalu dicap **saat konfirmasi**: nama, label (CHECK-IN / CHECK-OUT / BUKTI KERJA), tanggal dan jam server, lokasi terverifikasi (nama lokasi, jarak, koordinat, akurasi), nama perusahaan, sesi, dan sumber "kamera HP". Cap ini dibuat oleh aplikasi; tidak ada kolom yang dapat diedit karyawan;
    - lokasi tetap diambil dari GPS dan divalidasi ulang di server seperti biasa. Jam resmi tetap jam server;
-   - browser mengirim `photoSource`, hash SHA-256 file asli, dan umur file. Server menambahkan penanda `LAMPIRAN` dan, bila umur lebih dari 15 menit, `FOTO_LAMA`;
+   - browser mengirim `photoSource`, hash SHA-256 file asli, dan umur file. Server menambahkan penanda `LAMPIRAN` (kamera HP) atau `GALERI` (dipilih dari galeri) dan, bila umur lebih dari 15 menit, `FOTO_LAMA`;
    - check-out tetap wajib selfie, foto hasil kerja, dan laporan jobdesk;
    - Admin dapat menonaktifkan jalur ini di **Pengaturan → Perusahaan & aturan** ("Izinkan foto dari kamera HP bila kamera langsung diblokir"). Jika dinonaktifkan, server menolak foto lampiran (`PHOTO_UPLOAD_DISABLED`); di web app Apps Script ini berarti karyawan tidak dapat absen sama sekali.
 

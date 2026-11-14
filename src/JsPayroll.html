@@ -22,7 +22,7 @@ function rangeFields(from, to) {
     '<label class="field" style="flex:0 1 160px"><span class="label">Sampai</span><input class="input" type="date" data-to value="' + esc(to) + '"></label>';
 }
 
-const FLAG_SHORT = { FOTO_LAMA: 'foto lama', LAMPIRAN: 'kamera HP', TANPA_ABSEN: 'tidak ada absen di tanggal ini' };
+const FLAG_SHORT = { FOTO_LAMA: 'foto lama', LAMPIRAN: 'kamera HP', GALERI: 'dari galeri', TANPA_ABSEN: 'tidak ada absen di tanggal ini' };
 
 function flagLine(flags) {
   return flags && flags.length ? '<div class="small mt-1" style="color:var(--warning)">' + icon('flag', 'ic-sm') + ' ' + esc(flags.map(f => FLAG_SHORT[f] || f).join(', ')) + '</div>' : '';
