@@ -46,6 +46,7 @@ const ICONS = {
   chevronLeft: '<path d="m15 18-6-6 6-6"/>',
   chevronRight: '<path d="m9 18 6-6-6-6"/>',
   chevronDown: '<path d="m6 9 6 6 6-6"/>',
+  chevronUp: '<path d="m18 15-6-6-6 6"/>',
   eye: '<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>',
   eyeOff: '<path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
@@ -114,17 +115,19 @@ const Store = {
  */
 const READ_ACTIONS = ['app.boot', 'dashboard.summary', 'employees.list', 'employees.get', 'attendance.history', 'attendance.list',
   'jobs.list', 'leave.list', 'report.monthly', 'meta.options', 'work.list', 'bonus.list', 'bonus.form', 'bonus.schemes',
-  'rates.list', 'payroll.summary', 'settings.get', 'schedules.list', 'locations.list', 'users.list', 'audit.list'];
+  'rates.list', 'payroll.summary', 'settings.get', 'schedules.list', 'locations.list', 'users.list', 'audit.list',
+  'pay.unpaid', 'pay.history', 'pay.mine'];
 /** Aksi yang tidak mengubah data dan tidak perlu di-cache. */
 const NEUTRAL_ACTIONS = ['time.now', 'auth.me', 'auth.login', 'auth.logout', 'notif.summary', 'attendance.state', 'attendance.begin',
   'attendance.checkLocation', 'attendance.photo', 'work.photo', 'bonus.photo', 'app.prefetch'];
 /** Domain data yang ikut usang saat sebuah domain ditulis. Domain yang tidak terdaftar membuang semua cache. */
 const CACHE_DEPENDS = {
-  attendance: ['attendance', 'work', 'bonus'],
+  attendance: ['attendance', 'work', 'bonus', 'pay'],
   leave: ['leave', 'attendance'],
   jobs: ['jobs'],
-  work: ['work'],
-  bonus: ['bonus'],
+  work: ['work', 'pay'],
+  bonus: ['bonus', 'pay'],
+  pay: ['pay', 'work', 'bonus'],
   rates: ['rates', 'work'],
   employees: ['app', 'employees', 'meta', 'users', 'attendance', 'work', 'bonus'],
   users: ['app', 'users', 'employees'],
@@ -586,6 +589,19 @@ function DataTable(opts) {
   return { el, render, setRows(r) { rows = r || []; render(); }, rows: () => rows };
 }
 
+/** Memindahkan baris tab tepat setelah kepala halaman ke dalam kepala halaman, sebaris dengan judul. */
+function mergePageHead(root) {
+  $$('.page-head + .tabs', root).forEach(tabs => {
+    const head = tabs.previousElementSibling;
+    const main = head.firstElementChild;
+    if (!main) return;
+    tabs.classList.add('head-tabs');
+    tabs.removeAttribute('style');
+    const title = $('.page-title', main);
+    if (title && title.nextSibling) main.insertBefore(tabs, title.nextSibling); else main.appendChild(tabs);
+  });
+}
+
 /* ---------- Navigasi ---------- */
 /** Hanya Super Admin & HRD yang melihat data karyawan lain (dijaga juga di server). */
 const STAFF_ROLES = ['admin', 'hr'];
@@ -842,54 +858,97 @@ const App = {
   /** Apakah halaman yang dirender dengan nomor gen masih aktif. */
   alive(gen) { return gen === this.gen; },
 
-  openSidebar() { $('#sidebar').classList.add('is-open'); $('#sidebar-backdrop').classList.add('is-open'); },
-  closeSidebar() { const s = $('#sidebar'); if (s) { s.classList.remove('is-open'); $('#sidebar-backdrop').classList.remove('is-open'); } },
+  /** HP: lembar "Lainnya" berisi semua menu dan akun (seperti navigasi bawah aplikasi referensi). */
+  openSidebar() {
+    this.closeSidebar();
+    const u = this.user;
+    const items = NAV.filter(n => this.can(n.id)).map(n => '<a href="#/' + n.id + '" class="sheet-item" data-nav="' + n.id + '">' + icon(n.icon) + esc(n.label) + '</a>').join('');
+    const sheet = h('<div class="sheet-backdrop" id="more-sheet"><div class="sheet" role="dialog" aria-modal="true" aria-label="Menu lainnya">' +
+      '<div class="sheet-head"><div class="row" style="gap:10px"><span class="brand-logo" style="width:34px;height:34px" role="img" aria-label="Logo"></span><div><div class="strong">' + esc(this.company.companyName) + '</div><div class="small muted">' + esc(u.nama) + ' · ' + esc(u.roleLabel) + '</div></div></div>' +
+      '<button class="icon-btn" data-sheet-close aria-label="Tutup">' + icon('x') + '</button></div>' +
+      '<nav class="sheet-list">' + items + '</nav>' +
+      '<div class="sheet-foot"><button class="btn btn-outline btn-block" data-do="password">' + icon('key') + 'Ubah password</button>' +
+      '<button class="btn btn-outline btn-block" data-do="logout">' + icon('logout') + 'Keluar</button></div></div></div>');
+    document.body.appendChild(sheet);
+    on(sheet, 'click', '[data-sheet-close]', () => this.closeSidebar());
+    sheet.addEventListener('click', e => { if (e.target === sheet) this.closeSidebar(); });
+    on(sheet, 'click', '[data-nav]', () => this.closeSidebar());
+    on(sheet, 'click', '[data-do]', (e, b) => {
+      this.closeSidebar();
+      if (b.dataset.do === 'password') this.changePasswordDialog();
+      if (b.dataset.do === 'logout') this.confirmLogout();
+    });
+  },
+  closeSidebar() { const s = $('#more-sheet'); if (s) s.remove(); },
+  async confirmLogout() {
+    if (await UI.confirm({ title: 'Keluar', message: 'Keluar dari aplikasi di perangkat ini?', confirmText: 'Keluar' })) this.logout();
+  },
+  sideWide() { try { return localStorage.getItem('gg_sidebar') === '1'; } catch (e) { return false; } },
 
+  /*
+   * Kerangka mengikuti pola aplikasi referensi: sidebar berupa rel ikon yang bisa dilebarkan
+   * (pilihan tersimpan di perangkat), lonceng & menu akun di bawah sidebar, tanpa bilah atas
+   * di desktop, dan navigasi bawah + lembar "Lainnya" di HP. Warna tetap warna GGSHOPS.ID.
+   */
   renderShell() {
     const u = this.user;
+    const wide = this.sideWide();
     const navHtml = NAV.filter(n => this.can(n.id)).map(n =>
-      '<a href="#/' + n.id + '" class="nav-item" data-nav="' + n.id + '">' + icon(n.icon) + '<span>' + esc(n.label) + '</span>' +
+      '<a href="#/' + n.id + '" class="nav-item" data-nav="' + n.id + '" title="' + esc(n.label) + '">' + icon(n.icon) + '<span class="nav-label">' + esc(n.label) + '</span>' +
       (n.id === 'izin' ? '<span class="nav-count hidden" data-leave-count></span>' : '') +
       (n.id === 'gaji' ? '<span class="nav-count hidden" data-work-count></span>' : '') + '</a>').join('');
     const bn = (id, label, ic) => '<a href="#/' + id + '" class="bn-item" data-nav="' + id + '">' + icon(ic) + '<span>' + label + '</span></a>';
+    const logo = size => '<span class="brand-logo" style="width:' + size + 'px;height:' + size + 'px" role="img" aria-label="Logo ' + esc(this.company.companyName) + '"></span>';
     $('#app').innerHTML =
-      '<div class="shell">' +
+      '<div class="shell' + (wide ? ' side-wide' : '') + '">' +
       '<aside class="sidebar" id="sidebar" aria-label="Navigasi utama">' +
-        '<div class="brand"><span class="brand-logo" style="width:42px;height:42px" role="img" aria-label="Logo ' + esc(this.company.companyName) + '"></span><div style="min-width:0"><div class="brand-name">' + esc(this.company.companyName) + '</div><div class="brand-sub">HR &amp; Attendance</div></div></div>' +
+        '<div class="side-top"><button class="side-toggle" data-action="side-toggle" aria-label="' + (wide ? 'Sembunyikan menu' : 'Tampilkan menu') + '">' +
+          icon(wide ? 'chevronLeft' : 'chevronRight', 'ic-sm') + '<span class="nav-label">Sembunyikan</span></button>' +
+          '<a href="#/dashboard" class="brand">' + logo(40) + '<span class="brand-text"><span class="brand-name">' + esc(this.company.companyName) + '</span><span class="brand-sub">HR &amp; Attendance</span></span></a></div>' +
         '<nav class="nav">' + navHtml + '</nav>' +
-        '<div class="sidebar-foot">' + UI.avatar(u.nama) + '<div class="grow"><div class="person-name">' + esc(u.nama) + '</div><div class="person-sub">' + esc(u.roleLabel) + '</div></div>' +
-        '<button class="icon-btn" data-action="logout" title="Keluar" aria-label="Keluar">' + icon('logout') + '</button></div>' +
+        '<div class="side-bottom">' +
+          '<div class="rel"><button class="nav-item" data-action="notif" title="Notifikasi" aria-label="Notifikasi">' + icon('bell') + '<span class="nav-label">Notifikasi</span><span class="notif-dot hidden"></span></button></div>' +
+          '<div class="rel sidebar-foot"><button class="account-btn" data-action="account" aria-label="Akun ' + esc(u.nama) + '">' + UI.avatar(u.nama) +
+            '<span class="account-text"><span class="person-name">' + esc(u.nama) + '</span><span class="person-sub">' + esc(u.roleLabel) + '</span></span>' + icon('chevronUp', 'ic-sm') + '</button></div>' +
+        '</div>' +
       '</aside>' +
-      '<div class="sidebar-backdrop" id="sidebar-backdrop"></div>' +
       '<div class="main">' +
         '<header class="topbar">' +
-          '<button class="icon-btn menu-btn" data-action="menu" aria-label="Buka menu">' + icon('menu') + '</button>' +
-          '<span class="brand-logo topbar-logo" style="width:34px;height:34px" role="img" aria-label="Logo ' + esc(this.company.companyName) + '"></span>' +
+          '<span class="topbar-logo">' + logo(32) + '</span>' +
           '<div class="topbar-title" id="topbar-title"></div>' +
           '<div class="topbar-right">' +
             '<span class="sync-ind hidden" id="sync-ind" role="status" aria-live="polite"></span>' +
             '<span class="topbar-date num" id="topbar-date"></span>' +
-            '<div class="rel"><button class="icon-btn" data-action="notif" aria-label="Notifikasi">' + icon('bell') + '<span class="notif-dot hidden" id="notif-dot"></span></button></div>' +
-            '<div class="rel"><button class="icon-btn" data-action="account" aria-label="Akun" style="width:auto;padding:0 4px">' + UI.avatar(u.nama) + '</button></div>' +
+            '<div class="rel topbar-bell"><button class="icon-btn" data-action="notif" aria-label="Notifikasi">' + icon('bell') + '<span class="notif-dot hidden"></span></button></div>' +
           '</div>' +
         '</header>' +
         '<main class="content" id="view"></main>' +
       '</div>' +
       '<nav class="bottom-nav" aria-label="Navigasi bawah">' + bn('dashboard', 'Beranda', 'dashboard') + bn('jobdesk', 'Jobdesk', 'clipboard') +
-        '<a href="#/absensi" class="bn-item bn-main" data-nav="absensi"><span class="bn-circle">' + icon('scan') + '</span><span>Absen</span></a>' +
-        bn('izin', 'Izin', 'calendar') + '<button class="bn-item" data-action="menu">' + icon('menu') + '<span>Menu</span></button></nav>' +
+        bn('absensi', 'Absen', 'scan') + bn('izin', 'Izin', 'calendar') +
+        '<button class="bn-item" data-action="menu">' + icon('more') + '<span>Lainnya</span></button></nav>' +
       '</div>';
 
     const app = $('#app');
     on(app, 'click', '[data-action="menu"]', () => this.openSidebar());
+    on(app, 'click', '[data-action="side-toggle"]', () => {
+      const w = !this.sideWide();
+      try { localStorage.setItem('gg_sidebar', w ? '1' : '0'); } catch (e) { /* abaikan */ }
+      $('.shell').classList.toggle('side-wide', w);
+      const t = $('[data-action="side-toggle"]');
+      t.setAttribute('aria-label', w ? 'Sembunyikan menu' : 'Tampilkan menu');
+      t.innerHTML = icon(w ? 'chevronLeft' : 'chevronRight', 'ic-sm') + '<span class="nav-label">Sembunyikan</span>';
+    });
     on(app, 'click', '[data-action="reload-view"]', () => { this.showSync(''); this.route(); });
     on(app, 'click', '[data-action="reload-app"]', () => location.reload());
-    on(app, 'click', '#sidebar-backdrop', () => this.closeSidebar());
-    on(app, 'click', '[data-action="logout"]', async () => {
-      if (await UI.confirm({ title: 'Keluar', message: 'Keluar dari aplikasi di perangkat ini?', confirmText: 'Keluar' })) this.logout();
-    });
+    on(app, 'click', '[data-action="logout"]', () => this.confirmLogout());
     on(app, 'click', '[data-action="notif"]', (e, b) => this.toggleDropdown(b.parentNode, this.notifMenu()));
     on(app, 'click', '[data-action="account"]', (e, b) => this.toggleDropdown(b.parentNode, this.accountMenu()));
+    // Tab halaman dipindah sebaris dengan judul (pola "Judul  Tab1  Tab2" referensi).
+    if (!this.headObserver) {
+      this.headObserver = new MutationObserver(() => mergePageHead(document));
+      this.headObserver.observe(app, { childList: true, subtree: true });
+    }
 
     const updateDate = () => { const n = Clock.now(); const el = $('#topbar-date'); if (el && n) el.textContent = Clock.dateLabel(n); };
     updateDate();
@@ -911,7 +970,7 @@ const App = {
     on(dd, 'click', '[data-do]', (e, b) => {
       dd.remove();
       if (b.dataset.do === 'password') this.changePasswordDialog();
-      if (b.dataset.do === 'logout') this.logout();
+      if (b.dataset.do === 'logout') this.confirmLogout();
     });
   },
 
@@ -939,8 +998,7 @@ const App = {
 
   showNotif() {
     {
-      const dot = $('#notif-dot');
-      if (dot) { dot.textContent = this.notif.count; dot.classList.toggle('hidden', !this.notif.count); }
+      $$('.notif-dot').forEach(dot => { dot.textContent = this.notif.count; dot.classList.toggle('hidden', !this.notif.count); });
       const leave = this.notif.items.filter(i => i.route === 'izin')[0];
       const lc = $('[data-leave-count]');
       if (lc) { const n = leave ? parseInt(leave.text, 10) : 0; lc.textContent = n; lc.classList.toggle('hidden', !n); }

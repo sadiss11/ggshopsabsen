@@ -133,7 +133,7 @@ const SCHEMA_ = {
     ['reportId', 's'], ['attendanceId', 's'], ['employeeId', 's'], ['workDate', 'd'], ['rateId', 's'],
     ['namaJobdesk', 's'], ['tarif', 'n'], ['keterangan', 's'], ['photoId', 's'], ['photoHash', 's'],
     ['status', 's'], ['diverifikasiOleh', 's'], ['diverifikasiAt', 'dt'], ['catatanVerifikasi', 's'],
-    ['createdAt', 'dt'], ['updatedAt', 'dt'], ['flags', 's'],
+    ['createdAt', 'dt'], ['updatedAt', 'dt'], ['flags', 's'], ['paymentId', 's'], ['paidAt', 'dt'],
   ],
   /** Jenis paket bonus: tarif per paket di atas target harian, untuk peserta yang dipilih HR. */
   BonusSchemes: [
@@ -145,7 +145,13 @@ const SCHEMA_ = {
     ['bonusId', 's'], ['batchId', 's'], ['employeeId', 's'], ['workDate', 'd'], ['schemeId', 's'], ['namaSkema', 's'],
     ['tarif', 'n'], ['target', 'n'], ['jumlah', 'n'], ['paketBonus', 'n'], ['nominal', 'n'], ['keterangan', 's'],
     ['photoId', 's'], ['photoHash', 's'], ['status', 's'], ['diverifikasiOleh', 's'], ['diverifikasiAt', 'dt'],
-    ['catatanVerifikasi', 's'], ['createdAt', 'dt'], ['updatedAt', 'dt'], ['flags', 's'],
+    ['catatanVerifikasi', 's'], ['createdAt', 'dt'], ['updatedAt', 'dt'], ['flags', 's'], ['paymentId', 's'], ['paidAt', 'dt'],
+  ],
+  /** Pembayaran gaji: satu baris per pembayaran ke satu karyawan (jobdesk + bonus yang disetujui). */
+  Payments: [
+    ['paymentId', 's'], ['employeeId', 's'], ['nama', 's'], ['dari', 'd'], ['sampai', 'd'], ['jumlahLaporan', 'n'],
+    ['jobdesk', 'n'], ['bonus', 'n'], ['total', 'n'], ['catatan', 's'], ['status', 's'],
+    ['dibayarOleh', 's'], ['dibayarAt', 'dt'], ['dibatalkanOleh', 's'], ['dibatalkanAt', 'dt'],
   ],
   AuditLogs: [
     ['logId', 's'], ['timestamp', 'dt'], ['waktuLokal', 's'], ['userId', 's'], ['username', 's'],

@@ -210,7 +210,8 @@ function appBoot_(ctx, p) {
 
 /** Aksi baca yang boleh diambil sekaligus lewat app.prefetch. */
 const PREFETCHABLE_ = ['dashboard.summary', 'attendance.state', 'jobs.list', 'leave.list', 'employees.list', 'employees.get', 'attendance.history',
-  'meta.options', 'work.list', 'bonus.list', 'bonus.form', 'bonus.schemes', 'rates.list', 'payroll.summary'];
+  'meta.options', 'work.list', 'bonus.list', 'bonus.form', 'bonus.schemes', 'rates.list', 'payroll.summary',
+  'pay.unpaid', 'pay.history', 'pay.mine', 'attendance.list', 'report.monthly', 'settings.get', 'locations.list', 'users.list'];
 
 /**
  * Mengambil data beberapa halaman dalam satu eksekusi (satu kali jeda server, bukan satu per halaman).
@@ -219,7 +220,7 @@ const PREFETCHABLE_ = ['dashboard.summary', 'attendance.state', 'jobs.list', 'le
 function appPrefetch_(ctx, p) {
   const routes = routes_();
   const out = {};
-  (Array.isArray(p.items) ? p.items : []).slice(0, 16).forEach(it => {
+  (Array.isArray(p.items) ? p.items : []).slice(0, 30).forEach(it => {
     const key = cleanText_(it && it.key, 300);
     const action = String((it && it.action) || '');
     const route = routes[action];

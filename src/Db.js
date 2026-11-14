@@ -14,7 +14,7 @@
 const DB_ = { ss: null, sheets: {}, headers: {}, rows: {}, tz: null, versions: {}, touched: {} };
 
 /** Sheet yang dibaca utuh dan di-cache (referensi kecil + laporan gaji yang dibaca halaman Gaji). */
-const CACHED_TABLES_ = ['Users', 'Employees', 'WorkSchedules', 'WorkLocations', 'LeaveRequests', 'Jobdesk', 'JobRates', 'BonusSchemes', 'WorkReports', 'BonusReports'];
+const CACHED_TABLES_ = ['Users', 'Employees', 'WorkSchedules', 'WorkLocations', 'LeaveRequests', 'Jobdesk', 'JobRates', 'BonusSchemes', 'WorkReports', 'BonusReports', 'Payments'];
 /** Sheet besar yang hanya dibaca bagian akhirnya (rowsTail_); bagian akhir itu di-cache per versi. */
 const TAIL_CACHED_TABLES_ = ['Attendance'];
 const TABLE_TTL_SEC_ = 300;

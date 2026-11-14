@@ -102,6 +102,11 @@ function routes_() {
     'work.verify': { fn: workVerify_, roles: STAFF },
     'work.photo': { fn: workPhoto_ },
     'payroll.summary': { fn: payrollSummary_, roles: HR },
+    'pay.unpaid': { fn: payUnpaid_, roles: HR },
+    'pay.mark': { fn: payMark_, roles: HR },
+    'pay.history': { fn: payHistory_, roles: HR },
+    'pay.cancel': { fn: payCancel_, roles: HR },
+    'pay.mine': { fn: payMine_ },
 
     'bonus.schemes': { fn: bonusSchemes_, roles: HR },
     'bonus.saveScheme': { fn: bonusSaveScheme_, roles: HR },

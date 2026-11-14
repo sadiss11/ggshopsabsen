@@ -584,7 +584,7 @@ test('E15 bonus host: tulis 100 paket (target 40) + screenshot di ponsel → HR 
     assert.equal(t.env.table('BonusReports')[0].status, 'Disetujui');
     assert.equal(t.env.table('BonusReports')[0].diverifikasiOleh, 'rina');
     await hr.goto(t.url + '#/gaji/rekap', { waitUntil: 'domcontentloaded' });
-    await hr.waitForFunction(() => { const b = document.querySelector('#pay-body'); return b && /Bonus penjualan\s*Rp\s?30\.000/.test(b.innerText); }, { timeout: 15000 });
+    await hr.waitForFunction(() => { const b = document.querySelector('#pay-body'); return b && /Bonus penjualan\s*Rp\s?30\.000/i.test(b.innerText); }, { timeout: 15000 });
     await hr.screenshot({ path: path.join(SHOTS, 'desktop-gaji-rekap-bonus.png'), fullPage: true });
     assert.deepEqual(t.errors, []);
   } finally { await t.close(); }
@@ -646,7 +646,8 @@ test('E16 kecepatan: halaman tampil dari cache saat server lambat, diperbarui di
     console.log('E16 waktu (server tiruan 1.200 ms/panggilan): jobdesk ' + job.ms + ' ms, izin ' + izin.ms + ' ms, gaji ' + gaji.ms + ' ms, buka ulang aplikasi ' + shellMs + ' ms');
 
     // Keluar: cache dihapus dari browser.
-    await t.page.click('[data-action="logout"]');
+    await t.page.click('.sidebar [data-action="account"]');
+    await t.page.click('.dropdown [data-do="logout"]');
     await t.page.waitForSelector('.overlay [data-ok]');
     await t.page.click('.overlay [data-ok]');
     await t.page.waitForSelector('#login-form', { timeout: 15000 });
@@ -734,6 +735,50 @@ test('E19 versi Vercel: halaman aplikasi tersimpan di HP (service worker), terbu
     console.log('E19 waktu buka halaman tanpa jaringan: ' + ms + ' ms');
     assert.ok(ms < 1500, 'terbuka dari simpanan HP dalam ' + ms + ' ms');
     await t.page.setOfflineMode(false);
+    assert.deepEqual(t.errors, []);
+  } finally { await t.close(); }
+});
+
+test('E20 verifikasi semua tanggal tanpa mencari, lalu tandai gaji sudah dibayar dari menu Pembayaran', { skip: SKIP }, async () => {
+  const t = await setup({ base: wib('2026-10-01', '08:00'), viewport: DESKTOP });
+  try {
+    const { attend } = require('./helpers');
+    const rate = t.env.api('rates.save', { nama: 'Packing pesanan', tarif: 50000 }, t.tokens.rina).data.rateId;
+    for (const d of ['2026-10-01', '2026-10-20']) {
+      t.env.setNow(wib(d, '08:00'));
+      attend(t.env, require('./helpers').relogin(t.env, 'budi'), 'checkin', Object.assign(offset(15, 10), { accuracy: 9 }));
+      t.env.setNow(wib(d, '17:00'));
+      attend(t.env, require('./helpers').relogin(t.env, 'budi'), 'checkout', Object.assign(offset(15, 10), { accuracy: 9 }), { workRateIds: [rate] });
+    }
+    t.setSkew(wib('2026-11-14', '09:00') - wib('2026-10-01', '08:00'));
+    t.env.setNow(wib('2026-11-14', '09:00'));
+    await login(t, 'rina', 'Rahasiarina2026');
+    await t.page.evaluate(() => { location.hash = '#/gaji/verifikasi'; });
+    await t.page.waitForFunction(() => document.querySelectorAll('#pay-body [data-ok]').length === 2, { timeout: 15000 });
+    const dates = await t.page.$$eval('#pay-body tbody tr td:nth-child(2)', tds => tds.map(td => td.innerText.trim()));
+    assert.deepEqual(dates, ['20 Okt 2026', '1 Okt 2026'], 'laporan 1,5 bulan lalu tampil tanpa memilih tanggal');
+    assert.equal(await t.page.$eval('#pay-body [data-from]', i => i.value), '');
+    await t.page.click('#pay-body [data-pick-all]');
+    await t.page.click('#pay-body [data-bulk-ok]');
+    await t.page.waitForFunction(() => /2 laporan disetujui/i.test(document.body.innerText), { timeout: 10000 });
+    await t.page.screenshot({ path: path.join(SHOTS, 'desktop-verifikasi-semua.png') });
+    await t.page.evaluate(() => { location.hash = '#/gaji/pembayaran'; });
+    await t.page.waitForSelector('#pay-body [data-pay]', { timeout: 15000 });
+    assert.match(await t.page.$eval('#pay-body', b => b.innerText), /Rp\s?100\.000/);
+    await t.page.screenshot({ path: path.join(SHOTS, 'desktop-belum-dibayar.png') });
+    await t.page.click('#pay-body [data-pay]');
+    await t.page.waitForSelector('.overlay [data-ok]');
+    await t.page.type('.overlay [name=catatan]', 'Transfer BCA');
+    await t.page.click('.overlay [data-ok]');
+    await t.page.waitForFunction(() => /Semua gaji sudah dibayar/.test(document.querySelector('#pay-body').innerText), { timeout: 15000 });
+    const pay = t.env.table('Payments');
+    assert.equal(pay.length, 1);
+    assert.equal(Number(pay[0].total), 100000);
+    assert.equal(pay[0].catatan, 'Transfer BCA');
+    assert.ok(t.env.table('WorkReports').every(r => r.paymentId === pay[0].paymentId));
+    await t.page.click('#pay-body [data-seg] [data-v="sudah"]');
+    await t.page.waitForFunction(() => /Transfer BCA/.test(document.querySelector('#pay-body').innerText), { timeout: 15000 });
+    await t.page.screenshot({ path: path.join(SHOTS, 'desktop-sudah-dibayar.png') });
     assert.deepEqual(t.errors, []);
   } finally { await t.close(); }
 });

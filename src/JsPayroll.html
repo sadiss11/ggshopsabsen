@@ -71,6 +71,20 @@ function showBonusPhoto(r) {
   });
 }
 
+function paidBadge(r) {
+  return r.paidAt ? UI.badge('Sudah dibayar', 'success') : UI.badge('Belum dibayar', 'warning');
+}
+
+function renderMyPay(box, d) {
+  if (!box || !d) return;
+  box.innerHTML = '<div style="padding:16px 20px"><div class="summary-line">' +
+    '<div><div class="k">Sudah dibayar</div><div class="v money">' + esc(Fmt.rupiah(d.sudahDibayar)) + '</div></div>' +
+    '<div><div class="k">Belum dibayar</div><div class="v money">' + esc(Fmt.rupiah(d.belumDibayar)) + '</div><div class="small muted">' + (d.belumDibayarLaporan || 0) + ' laporan disetujui</div></div></div>' +
+    (d.payments.length ? '<div class="table-wrap mt-4"><table class="table"><thead><tr><th>Tanggal bayar</th><th>Periode laporan</th><th class="right">Total</th><th>Catatan</th></tr></thead><tbody>' +
+      d.payments.map(p => '<tr><td class="nowrap">' + esc(Fmt.date(Clock.dateStr(Date.parse(p.dibayarAt)))) + '</td><td class="nowrap">' + esc(Fmt.date(p.dari)) + (p.sampai !== p.dari ? ' – ' + esc(Fmt.date(p.sampai)) : '') + '</td><td class="right money">' + esc(Fmt.rupiah(p.total)) + '</td><td class="small muted">' + esc(p.catatan || '–') + '</td></tr>').join('') +
+      '</tbody></table></div>' : '<p class="small muted mt-3">Belum ada pembayaran yang tercatat.</p>') + '</div>';
+}
+
 function totalsLine(t) {
   return '<div class="summary-line">' +
     '<div><div class="k">Disetujui</div><div class="v money">' + esc(Fmt.rupiah(t.Disetujui.total)) + '</div><div class="small muted">' + t.Disetujui.count + ' laporan</div></div>' +
@@ -116,7 +130,7 @@ async function reportVerifier(body, gen, cfg) {
   const meta = await metaOptions();
   if (!App.alive(gen)) return;
   body.innerHTML = '<div class="card">' + (cfg.title ? '<div class="card-head"><div><div class="card-title">' + esc(cfg.title) + '</div><div class="card-sub">' + esc(cfg.sub) + '</div></div></div>' : '') +
-    '<div class="table-tools" style="border-bottom:1px solid var(--border)">' + rangeFields(dateAdd(today, -6), today) +
+    '<div class="table-tools" style="border-bottom:1px solid var(--border)">' + rangeFields('', '') +
     '<label class="field" style="flex:0 1 170px"><span class="label">Status</span><select class="select" data-status>' + UI.options(['Menunggu', 'Disetujui', 'Ditolak'], 'Menunggu', 'Semua') + '</select></label>' +
     '<label class="field" style="flex:0 1 200px"><span class="label">Departemen</span><select class="select" data-dept>' + UI.options(meta.departments, '', 'Semua') + '</select></label>' +
     '<button class="btn btn-primary" style="align-self:flex-end" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button></div>' +
@@ -172,7 +186,11 @@ async function reportVerifier(body, gen, cfg) {
     } catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
     if (!App.alive(gen)) return;
     picked.clear();
-    $('[data-sum]', body).innerHTML = totalsLine(current.totals) + (current.truncated ? '<p class="small muted mt-2">Menampilkan 1.000 laporan pertama. Persempit rentang tanggal untuk melihat semuanya.</p>' : '');
+    const noDate = !$('[data-from]', body).value && !$('[data-to]', body).value;
+    const st = $('[data-status]', body).value;
+    $('[data-sum]', body).innerHTML = totalsLine(current.totals) +
+      '<p class="small muted mt-2">' + (noDate ? (st === 'Menunggu' ? 'Menampilkan semua laporan yang menunggu verifikasi dari semua tanggal.' : 'Tanpa tanggal: menampilkan 31 hari terakhir. Isi tanggal untuk rentang lain.') : 'Rentang ' + esc(Fmt.date($('[data-from]', body).value)) + ' – ' + esc(Fmt.date($('[data-to]', body).value)) + '.') + '</p>' +
+      (current.truncated ? '<p class="small muted mt-2">Menampilkan 1.000 laporan pertama. Persempit rentang tanggal untuk melihat semuanya.</p>' : '');
     const t = DataTable({
       rows: current.reports, pageSize: 20, searchKeys: cfg.searchKeys, searchPlaceholder: cfg.searchPlaceholder, empty: cfg.empty,
       columns: [
@@ -460,6 +478,95 @@ const PayrollTabs = {
     await Promise.all(jobs);
   },
 
+  /* ---------- Pembayaran: belum & sudah dibayar ---------- */
+  async pembayaran(body, gen) {
+    let view = 'belum';
+    body.innerHTML = '<div class="seg-row"><div class="segmented" data-seg>' +
+      '<button data-v="belum" class="is-active">Belum dibayar</button><button data-v="sudah">Sudah dibayar</button></div></div><div data-pane class="mt-4"></div>';
+    const pane = $('[data-pane]', body);
+    const today = await todayStr();
+    // Setiap tampilan memakai wadah baru agar listener klik tidak menumpuk.
+    const fresh = html => { const box = document.createElement('div'); box.innerHTML = html; pane.innerHTML = ''; pane.appendChild(box); return box; };
+    const payDate = iso => { const ms = Date.parse(iso); return isNaN(ms) ? '–' : Fmt.date(Clock.dateStr(ms)) + ' ' + Clock.timeStr(ms).slice(0, 5); };
+    const showUnpaid = async (live) => {
+      let d;
+      try { d = await (live ? api : api.swr)('pay.unpaid'); } catch (ex) { pane.innerHTML = UI.callout('danger', esc(ex.message)); return; }
+      if (!App.alive(gen) || view !== 'belum') return;
+      const box = fresh('<div class="card"><div class="card-head"><div><div class="card-title">Belum dibayar</div><div class="card-sub">Laporan jobdesk & bonus yang sudah disetujui HR tetapi gajinya belum dibayarkan</div></div>' +
+        '<div class="strong money" style="font-size:20px">' + esc(Fmt.rupiah(d.total)) + '</div></div><div data-t></div></div>');
+      const t = DataTable({
+        rows: d.rows, pageSize: 25, searchKeys: ['nama', 'employeeId', 'departemen'], searchPlaceholder: 'Cari karyawan…',
+        empty: { icon: 'wallet', title: 'Semua gaji sudah dibayar', text: 'Gaji yang sudah disetujui dan belum dibayar akan muncul di sini.' },
+        columns: [
+          { label: 'Karyawan', render: r => UI.person(r.nama, r.employeeId + (r.departemen ? ' · ' + r.departemen : '')) },
+          { label: 'Periode laporan', cls: 'nowrap', render: r => esc(Fmt.date(r.dari)) + (r.sampai !== r.dari ? ' – ' + esc(Fmt.date(r.sampai)) : '') },
+          { label: 'Laporan', cls: 'right num', render: r => String(r.jumlahLaporan) },
+          { label: 'Jobdesk', cls: 'right money', render: r => esc(Fmt.rupiah(r.jobdesk)) },
+          { label: 'Bonus', cls: 'right money', render: r => r.bonus ? esc(Fmt.rupiah(r.bonus)) : '<span class="faint">–</span>' },
+          { label: 'Total', cls: 'right money', render: r => '<span style="font-size:15px">' + esc(Fmt.rupiah(r.total)) + '</span>' },
+          { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-primary" data-pay="' + esc(r.employeeId) + '">' + icon('check', 'ic-sm') + 'Tandai sudah dibayar</button>' },
+        ],
+      });
+      $('[data-t]', box).appendChild(t.el);
+      on(box, 'click', '[data-pay]', (e, b) => {
+        const r = d.rows.find(x => x.employeeId === b.dataset.pay);
+        const m = UI.modal({
+          title: 'Tandai gaji sudah dibayar', size: 'sm',
+          body: '<dl class="kv" style="grid-template-columns:120px minmax(0,1fr)"><dt>Karyawan</dt><dd>' + esc(r.nama) + '</dd><dt>Laporan</dt><dd>' + r.jumlahLaporan + ' laporan disetujui</dd>' +
+            '<dt>Total dibayar</dt><dd class="money">' + esc(Fmt.rupiah(r.total)) + '</dd></dl>' +
+            '<label class="field mt-4"><span class="label">Dibayar sampai tanggal</span><input class="input" type="date" name="sampai" value="' + esc(r.sampai) + '" max="' + esc(today) + '"><span class="hint">Laporan setelah tanggal ini tetap belum dibayar.</span></label>' +
+            '<label class="field mt-3"><span class="label">Catatan</span><input class="input" name="catatan" maxlength="200" placeholder="Contoh: transfer BCA 14 Nov"></label><div data-err class="mt-3"></div>',
+          foot: '<button class="btn btn-outline" data-close>Batal</button><button class="btn btn-primary" data-ok>' + icon('check') + 'Sudah dibayar</button>',
+        });
+        $('[data-ok]', m.el).addEventListener('click', async () => {
+          const sampai = $('[name=sampai]', m.el).value;
+          const btn = $('[data-ok]', m.el);
+          UI.busy(btn, true, 'Menyimpan…');
+          try {
+            const expected = sampai === r.sampai ? r.total : undefined;
+            const res = await api('pay.mark', { employeeId: r.employeeId, sampai: sampai, expectedTotal: expected, catatan: $('[name=catatan]', m.el).value.trim() });
+            m.close();
+            UI.toast('Gaji ' + r.nama + ' ' + Fmt.rupiah(res.total) + ' ditandai sudah dibayar.', 'success');
+            showUnpaid(true);
+          } catch (ex) { UI.busy(btn, false); $('[data-err]', m.el).innerHTML = UI.callout('danger', esc(ex.message)); }
+        });
+      });
+    };
+    const showPaid = async (live) => {
+      let d;
+      try { d = await (live ? api : api.swr)('pay.history'); } catch (ex) { pane.innerHTML = UI.callout('danger', esc(ex.message)); return; }
+      if (!App.alive(gen) || view !== 'sudah') return;
+      const box = fresh('<div class="card"><div class="card-head"><div><div class="card-title">Sudah dibayar</div><div class="card-sub">Riwayat pembayaran gaji. Pembayaran yang salah bisa dibatalkan; laporannya kembali menjadi belum dibayar.</div></div>' +
+        '<div class="strong money" style="font-size:20px">' + esc(Fmt.rupiah(d.total)) + '</div></div><div data-t></div></div>');
+      const t = DataTable({
+        rows: d.payments, pageSize: 25, searchKeys: ['nama', 'employeeId', 'catatan'], searchPlaceholder: 'Cari karyawan atau catatan…',
+        empty: { icon: 'wallet', title: 'Belum ada pembayaran', text: 'Pembayaran yang ditandai di tab Belum dibayar akan tercatat di sini.' },
+        columns: [
+          { label: 'Tanggal bayar', cls: 'nowrap', render: r => esc(payDate(r.dibayarAt)) + '<div class="small muted">oleh ' + esc(r.dibayarOleh) + '</div>' },
+          { label: 'Karyawan', render: r => UI.person(r.nama, r.employeeId) },
+          { label: 'Periode laporan', cls: 'nowrap', render: r => esc(Fmt.date(r.dari)) + (r.sampai !== r.dari ? ' – ' + esc(Fmt.date(r.sampai)) : '') },
+          { label: 'Laporan', cls: 'right num', render: r => String(r.jumlahLaporan) },
+          { label: 'Total', cls: 'right money', render: r => esc(Fmt.rupiah(r.total)) },
+          { label: 'Status', render: r => UI.badge(r.status === 'Dibayar' ? 'Sudah dibayar' : 'Dibatalkan', r.status === 'Dibayar' ? 'success' : 'neutral') + (r.catatan ? '<div class="small muted mt-1">' + esc(r.catatan) + '</div>' : '') },
+          { label: '', cls: 'col-actions', render: r => r.status === 'Dibayar' ? '<button class="btn btn-sm btn-ghost" data-cancel="' + esc(r.paymentId) + '">Batalkan</button>' : '' },
+        ],
+      });
+      $('[data-t]', box).appendChild(t.el);
+      on(box, 'click', '[data-cancel]', async (e, b) => {
+        const r = d.payments.find(x => x.paymentId === b.dataset.cancel);
+        if (!await UI.confirm({ title: 'Batalkan pembayaran', message: 'Batalkan pembayaran ' + Fmt.rupiah(r.total) + ' untuk ' + r.nama + '? Laporannya akan kembali menjadi belum dibayar.', confirmText: 'Batalkan pembayaran', tone: 'danger' })) return;
+        try { await api('pay.cancel', { paymentId: r.paymentId }); UI.toast('Pembayaran dibatalkan.', 'success'); showPaid(true); } catch (ex) { UI.toast(ex.message, 'danger'); }
+      });
+    };
+    on(body, 'click', '[data-seg] [data-v]', (e, b) => {
+      view = b.dataset.v;
+      $$('[data-seg] [data-v]', body).forEach(x => x.classList.toggle('is-active', x === b));
+      fresh('<div style="padding:18px">' + UI.loading() + '</div>');
+      if (view === 'belum') showUnpaid(false); else showPaid(false);
+    });
+    await showUnpaid(false);
+  },
+
   /* ---------- Rekap gaji ---------- */
   async rekap(body, gen) {
     const today = await todayStr();
@@ -484,6 +591,8 @@ const PayrollTabs = {
       $('[data-sum]', body).innerHTML = '<div class="summary-line"><div><div class="k">Total gaji (disetujui)</div><div class="v money" style="font-size:26px">' + esc(Fmt.rupiah(current.totalGaji)) + '</div></div>' +
         '<div><div class="k">Jobdesk</div><div class="v money">' + esc(Fmt.rupiah(current.totalJobdesk)) + '</div></div>' +
         '<div><div class="k">Bonus penjualan</div><div class="v money">' + esc(Fmt.rupiah(current.totalBonus)) + '</div></div>' +
+        '<div><div class="k">Sudah dibayar</div><div class="v money">' + esc(Fmt.rupiah(current.totalDibayar)) + '</div></div>' +
+        '<div><div class="k">Belum dibayar</div><div class="v money">' + esc(Fmt.rupiah(current.totalBelumDibayar)) + '</div></div>' +
         '<div><div class="k">Masih menunggu verifikasi</div><div class="v money">' + esc(Fmt.rupiah(current.totalMenunggu)) + '</div></div>' +
         '<div><div class="k">Periode</div><div class="v" style="font-size:16px">' + esc(Fmt.date(current.from)) + ' – ' + esc(Fmt.date(current.to)) + '</div></div></div>' +
         '<p class="small muted mt-3">Gaji = laporan jobdesk + bonus penjualan yang disetujui pada rentang ini. Laporan yang masih menunggu belum dihitung. Dibuat ' + esc(current.generatedAt) + '.</p>';
@@ -493,7 +602,7 @@ const PayrollTabs = {
         empty: { icon: 'wallet', title: 'Belum ada karyawan pada filter ini', text: '' },
         footer: list => '<tr><td colspan="3">Total (' + list.length + ' karyawan)</td>' +
           '<td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.jobdesk))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.bonus))) + '</td>' +
-          '<td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.gaji))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.menunggu.total))) + '</td><td></td><td></td></tr>',
+          '<td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.gaji))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.dibayar))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.gaji - r.dibayar))) + '</td><td class="right money">' + esc(Fmt.rupiah(sumOf(list, r => r.menunggu.total))) + '</td><td></td><td></td></tr>',
         columns: [
           { label: 'Karyawan', render: r => UI.person(r.nama, r.employeeId + (r.status !== 'Aktif' ? ' · nonaktif' : '')) },
           { label: 'Departemen', render: r => esc(r.departemen || '–') },
@@ -501,6 +610,8 @@ const PayrollTabs = {
           { label: 'Jobdesk', cls: 'right money', render: r => esc(Fmt.rupiah(r.jobdesk)) },
           { label: 'Bonus', cls: 'right money', render: r => r.bonus ? esc(Fmt.rupiah(r.bonus)) : '<span class="faint">–</span>' },
           { label: 'Total gaji', cls: 'right money', render: r => '<span style="font-size:15px">' + esc(Fmt.rupiah(r.gaji)) + '</span>' },
+          { label: 'Sudah dibayar', cls: 'right money', render: r => r.dibayar ? esc(Fmt.rupiah(r.dibayar)) : '<span class="faint">–</span>' },
+          { label: 'Belum dibayar', cls: 'right money', render: r => r.gaji - r.dibayar ? esc(Fmt.rupiah(r.gaji - r.dibayar)) : '<span class="faint">–</span>' },
           { label: 'Menunggu', cls: 'right nowrap', render: r => r.menunggu.count ? '<span class="money">' + esc(Fmt.rupiah(r.menunggu.total)) + '</span><div class="small muted">' + r.menunggu.count + ' laporan</div>' : '<span class="faint">–</span>' },
           { label: 'Ditolak', cls: 'right num', render: r => r.ditolak.count ? String(r.ditolak.count) : '<span class="faint">–</span>' },
           { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-detail="' + esc(r.employeeId) + '">Rincian</button>' },
@@ -613,6 +724,7 @@ const PayrollTabs = {
     body.innerHTML = '<div class="card"><div class="table-tools" style="border-bottom:1px solid var(--border)">' + rangeFields(today.slice(0, 8) + '01', today) +
       '<button class="btn btn-primary" style="align-self:flex-end" data-load>' + icon('search', 'ic-sm') + 'Tampilkan</button></div>' +
       '<div data-sum style="padding:16px 20px"></div><div data-table></div></div>' +
+      '<div class="card mt-4" data-paycard><div class="card-head"><div><div class="card-title">Pembayaran gaji</div><div class="card-sub">Gaji yang sudah diterima dan yang belum dibayar</div></div></div><div data-pay></div></div>' +
       (host ? '<div class="card mt-4"><div class="card-head"><div><div class="card-title">Bonus penjualan</div><div class="card-sub">Laporan bonus pada rentang yang sama</div></div><a class="btn btn-sm btn-outline" href="#/gaji/bonus">Lapor penjualan</a></div><div data-bonus></div></div>' : '');
     let current = null, bonus = null;
     let first = true;
@@ -623,8 +735,9 @@ const PayrollTabs = {
       const call = first ? api.swr : api;
       first = false;
       try {
-        const res = await Promise.all([call('work.list', q), host ? call('bonus.list', q) : null]);
+        const res = await Promise.all([call('work.list', q), host ? call('bonus.list', q) : null, call('pay.mine')]);
         current = res[0]; bonus = res[1];
+        renderMyPay($('[data-pay]', body), res[2]);
       } catch (ex) { tbox.innerHTML = '<div style="padding:18px">' + UI.callout('danger', esc(ex.message)) + '</div>'; return; }
       if (!App.alive(gen)) return;
       const all = bonus ? addTotals(current.totals, bonus.totals) : current.totals;
@@ -638,7 +751,7 @@ const PayrollTabs = {
           { label: 'Tanggal', cls: 'nowrap', render: r => esc(Fmt.date(r.workDate)) },
           { label: 'Jobdesk', render: r => '<div class="strong">' + esc(r.namaJobdesk) + '</div><div class="small muted" style="max-width:340px">' + esc(r.keterangan) + '</div>' },
           { label: 'Tarif', cls: 'right money', render: r => esc(Fmt.rupiah(r.tarif)) },
-          { label: 'Status', render: r => UI.badge(r.status) + (r.catatanVerifikasi ? '<div class="small muted mt-1">' + esc(r.catatanVerifikasi) + '</div>' : '') },
+          { label: 'Status', render: r => UI.badge(r.status) + (r.status === 'Disetujui' ? ' ' + paidBadge(r) : '') + (r.catatanVerifikasi ? '<div class="small muted mt-1">' + esc(r.catatanVerifikasi) + '</div>' : '') },
           { label: '', cls: 'col-actions', render: r => '<button class="btn btn-sm btn-outline" data-photo="' + esc(r.reportId) + '">' + icon('image', 'ic-sm') + 'Foto</button>' },
         ],
       });
@@ -678,6 +791,7 @@ Pages.gaji = {
     if (staff) tabs.push({ id: 'verifikasi', label: 'Verifikasi laporan' });
     if (hr || host) tabs.push({ id: 'bonus', label: 'Bonus' });
     if (hr) tabs.push({ id: 'rekap', label: 'Rekap gaji' });
+    if (hr) tabs.push({ id: 'pembayaran', label: 'Pembayaran' });
     if (staff) tabs.push({ id: 'tarif', label: 'Jobdesk & tarif' });
     if (App.user.employeeId) tabs.push({ id: 'saya', label: 'Gaji saya' });
     view.innerHTML = '<div class="page-head"><div><h1 class="page-title">Gaji</h1><p class="page-sub">' +

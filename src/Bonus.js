@@ -228,8 +228,8 @@ function sumBonus_(list) {
 function bonusList_(ctx, p) {
   const empMap = {};
   rows_('Employees').forEach(e => { empMap[e.employeeId] = e; });
-  const range = rangeFromPayload_(p);
   const status = cleanText_(p.status, 20);
+  const range = listRange_(p, status, ctx);
   const dept = cleanText_(p.departemen, 60);
   const own = APPROVER_ROLES_.indexOf(ctx.user.role) < 0 || p.mine === true;
   const empId = own ? ctx.user.employeeId : cleanText_(p.employeeId, 20);

@@ -357,6 +357,18 @@ Aturan pemilik: tarif tetap per laporan, satu jobdesk dibayar sekali per hari ke
 | `bonus.list`, `bonus.photo` | Ya | Ya | Miliknya |
 | `bonus.verify` | Ya | Ya | – |
 
+### Pembayaran gaji (sudah & belum dibayar)
+
+- **Belum dibayar** = laporan jobdesk & bonus berstatus Disetujui yang belum memiliki `paymentId`, dari semua tanggal.
+- **Tandai sudah dibayar** (HR/Super Admin): semua laporan Disetujui yang belum dibayar sampai tanggal yang dipilih ditandai dengan satu `paymentId`, lalu satu baris `Payments` dicatat. Total yang dilihat HR dikirim ulang dan dicocokkan di dalam lock; bila berbeda (mis. ada laporan yang baru disetujui) server menolak (`PAY_CHANGED`).
+- **Laporan yang sudah dibayar terkunci**: verifikasi ulang ditolak (`ALREADY_PAID`) sampai pembayarannya dibatalkan. Pembatalan mengembalikan laporan menjadi belum dibayar; keduanya tercatat di audit (`PAY_MARK`, `PAY_CANCEL`).
+- Karyawan hanya melihat pembayaran dan sisa belum dibayar miliknya (`pay.mine`).
+
+| Aksi | admin | hr | karyawan |
+|---|---|---|---|
+| `pay.unpaid`, `pay.mark`, `pay.history`, `pay.cancel` | Ya | Ya | – |
+| `pay.mine` | Ya | Ya | Miliknya |
+
 ### Bonus penjualan paket
 
 Aturan pemilik: setiap jenis paket punya bonus per paket dan target harian sendiri; bonus per hari = (paket terjual − target) × bonus per paket, di bawah target Rp 0. Peserta (mis. host live) dipilih HR.

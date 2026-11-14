@@ -10,6 +10,7 @@ Aplikasi web manajemen SDM dan absensi karyawan berbasis **Google Apps Script**,
 - **Jam kerja bebas.** Tidak ada jadwal atau shift: karyawan check-in dan check-out kapan saja (sekali per tanggal, check-out paling lambat 04.00 keesokan hari). Check-in/check-out ganda tetap dicegah, dan izin/cuti yang disetujui tetap memblokir check-in.
 - **Hapus karyawan yang berhenti.** Data karyawan dan akunnya langsung terhapus dari daftar; riwayat tetap tersimpan sebagai arsip dan nomor karyawan tidak dipakai ulang.
 - **Gaji berbasis jobdesk:** saat pulang karyawan wajib memotret hasil kerja, memilih jobdesk yang dikerjakan, dan menulis keterangan. HR memverifikasi laporan; gaji = jumlah tarif laporan yang disetujui pada rentang tanggal bebas (ekspor CSV).
+- **Pembayaran gaji:** menu Gaji → Pembayaran berisi *Belum dibayar* (laporan disetujui yang belum dibayar, semua tanggal) dan *Sudah dibayar* (riwayat, bisa dibatalkan bila salah). Verifikasi langsung menampilkan semua laporan yang menunggu tanpa memilih tanggal.
 - **Bonus penjualan paket (host):** HR membuat jenis paket dengan bonus per paket dan target harian, lalu memilih pesertanya. Host menulis paket terjual dan melampirkan screenshot; bonus = (paket − target) × bonus per paket, dihitung server, dan masuk gaji setelah disetujui HR.
 - **Modul lain:** dashboard (kehadiran hari ini, siapa yang belum hadir, statistik 7 hari, aktivitas terbaru), data karyawan, profil, jobdesk, izin/sakit/cuti/dinas luar dengan persetujuan, laporan rekap bulanan dan riwayat (ekspor CSV), serta pengaturan (perusahaan, lokasi dengan peta, jadwal, pengguna, audit log).
 - **Peran pengguna:** Super Admin, HRD, dan Karyawan. Hanya Super Admin dan HRD yang dapat melihat absen, laporan jobdesk, gaji, foto, dan profil karyawan lain; Karyawan hanya melihat datanya sendiri.
@@ -69,8 +70,8 @@ npm run dev          # buka http://localhost:5173, akun demo tercetak di termina
 ## Pengujian
 
 ```bash
-npm test           # 90 uji backend pada mock Apps Script (termasuk gaji, bonus, privasi, cache)
-npm run test:e2e   # 19 uji E2E di Google Chrome (kamera palsu & emulasi GPS)
+npm test           # 93 uji backend pada mock Apps Script (termasuk gaji, bonus, privasi, cache)
+npm run test:e2e   # 20 uji E2E di Google Chrome (kamera palsu & emulasi GPS)
 npm run test:build # uji E2E & klik terhadap hasil build (kode yang di-push)
 npm run test:klik  # klik satu per satu setiap elemen (antislop R-35)
 npm run assets     # sematkan ulang gambar dari assets/ (latar & logo)

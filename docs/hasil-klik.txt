@@ -1,8 +1,8 @@
-Klik satu per satu (antislop R-35), Chrome headless, 2026-11-05T13:01:50.472Z
+Klik satu per satu (antislop R-35), Chrome headless, 2026-11-14T02:56:47.150Z
 
 PASS  Login: tombol mata password -> password terlihat (type=text)
 PASS  Login: kirim form kosong -> validasi: "Username dan password wajib diisi."
-PASS  Keyboard: Tab ke elemen pertama -> fokus terlihat: A outline solid 2px
+PASS  Keyboard: Tab ke elemen pertama -> fokus terlihat: BUTTON outline solid 2px
 PASS  Sidebar: dashboard -> #/dashboard · Dashboard
 PASS  Sidebar: karyawan -> #/karyawan · Data karyawan
 PASS  Sidebar: absensi -> #/absensi · Absensi
@@ -33,6 +33,7 @@ PASS  Izin: filter Disetujui -> 1 baris
 PASS  Gaji: tab verifikasi -> #/gaji/verifikasi · Dari / Sampai
 PASS  Gaji: tab bonus -> #/gaji/bonus · Verifikasi bonus penjualan / Cocokkan jumlah paket dengan screenshot sebelum menyetujui
 PASS  Gaji: tab rekap -> #/gaji/rekap · Dari / Sampai
+PASS  Gaji: tab pembayaran -> #/gaji/pembayaran · Belum dibayar / Sudah dibayar
 PASS  Gaji: tab tarif -> #/gaji/tarif · Jobdesk & tarif / Tarif dibayar sekali per hari untuk setiap jobdesk yang dilaporkan saat pulang dan disetujui
 PASS  Gaji tarif: Tambah jobdesk → simpan kosong -> validasi: "Nama jobdesk wajib diisi.", dialog ditutup dengan Escape
 PASS  Gaji rekap: unduh CSV -> CSV rekap gaji dibuat
@@ -54,9 +55,9 @@ PASS  Navigasi bawah: dashboard -> #/dashboard · lebar 390px
 PASS  Navigasi bawah: jobdesk -> #/jobdesk · lebar 390px
 PASS  Navigasi bawah: izin -> #/izin · lebar 390px
 PASS  Navigasi bawah: absensi -> #/absensi · lebar 390px
-PASS  Navigasi bawah: Menu -> laci menu terbuka
-PASS  Laci menu: Profil Saya -> #/profil · laci tertutup · lebar 390px
-PASS  Ukuran target sentuh tombol bawah -> tinggi 52/52/52/52/52 px (≥ 44)
+PASS  Navigasi bawah: Menu -> lembar Lainnya terbuka: 6 menu
+PASS  Lembar Lainnya: Profil Saya -> #/profil · laci tertutup · lebar 390px
+PASS  Ukuran target sentuh tombol bawah -> tinggi 44/44/44/44/44 px (≥ 44)
 PASS  Absensi: tombol Matikan kamera -> kamera mati, tampil "Kamera belum aktif"
 PASS  Absensi: tombol Aktifkan kamera -> kamera menyala kembali
 PASS  Absensi: tombol shutter -> pratinjau foto tampil, kamera berhenti

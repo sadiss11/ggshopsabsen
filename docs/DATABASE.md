@@ -332,6 +332,26 @@ Laporan jobdesk yang dibuat server saat check-out. Satu baris per jobdesk yang d
 
 Gaji jobdesk pada suatu rentang = jumlah `tarif` baris berstatus `Disetujui` dengan `workDate` di rentang itu. Kedua sheet dibuat otomatis saat pertama dipakai.
 
+### 4.10A Kolom pembayaran di WorkReports & BonusReports
+
+Kedua sheet laporan mendapat kolom `paymentId` (ID pembayaran, kosong = belum dibayar) dan `paidAt` (waktu ditandai sudah dibayar, UTC). Laporan yang sudah dibayar tidak dapat diubah statusnya sampai pembayarannya dibatalkan.
+
+### 4.10B Payments
+
+Satu baris per pembayaran gaji ke satu karyawan, dibuat dari menu **Gaji → Pembayaran**.
+
+| Kolom | Tipe | Arti | Contoh |
+|---|---|---|---|
+| `paymentId` | s | ID unik | `BYR-7A6B5C4D3E` |
+| `employeeId`, `nama` | s | Karyawan & salinan namanya | `K001`, `Budi Santoso` |
+| `dari`, `sampai` | d | Tanggal laporan pertama & terakhir yang dibayar | `2026-10-01` |
+| `jumlahLaporan` | n | Laporan jobdesk + bonus yang dibayar | `12` |
+| `jobdesk`, `bonus`, `total` | n | Rincian & total (Rp) | `600000` |
+| `catatan` | s | Mis. cara bayar | `Transfer BCA` |
+| `status` | s | `Dibayar` / `Dibatalkan` | `Dibayar` |
+| `dibayarOleh`, `dibayarAt` | s / dt | Siapa & kapan menandai | |
+| `dibatalkanOleh`, `dibatalkanAt` | s / dt | Diisi bila dibatalkan | |
+
 ### 4.11 BonusSchemes
 
 Jenis paket bonus penjualan (mis. untuk host live). Dikelola HR di **Gaji → Bonus**.

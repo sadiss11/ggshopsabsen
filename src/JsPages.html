@@ -192,26 +192,34 @@ async function metaOptions(force) {
   return META_CACHE;
 }
 
-/** Data halaman yang diambil di belakang setelah login. Payload harus sama persis dengan yang dipakai halaman. */
+/**
+ * Data SEMUA menu yang diambil sekaligus di belakang setelah login, agar setiap menu
+ * terbuka tanpa menunggu server. Payload harus sama persis dengan yang dipakai halaman.
+ */
 function prefetchPlan(u, today) {
   const hr = u.role === 'admin' || u.role === 'hr';
   const month = today.slice(0, 8) + '01';
   const out = [{ action: 'dashboard.summary' }, { action: 'jobs.list' }];
-  if (u.employeeId) out.push({ action: 'attendance.state', payload: { withHistory: true } });
   if (u.employeeId) {
-    out.push({ action: 'leave.list', payload: { scope: 'mine' } },
-      { action: 'work.list', payload: { from: month, to: today, mine: true } },
+    const mine = { from: month, to: today, mine: true };
+    out.push({ action: 'attendance.state', payload: { withHistory: true } },
+      { action: 'leave.list', payload: { scope: 'mine' } },
+      { action: 'work.list', payload: mine }, { action: 'pay.mine' },
       { action: 'employees.get', payload: { employeeId: u.employeeId } },
       { action: 'attendance.history', payload: { employeeId: u.employeeId, days: 31 } });
+    if (u.hasBonus) out.push({ action: 'bonus.form' }, { action: 'bonus.list', payload: mine });
   }
-  if (u.hasBonus) out.push({ action: 'bonus.form' }, { action: 'bonus.list', payload: { from: month, to: today, mine: true } });
   if (hr) {
-    const week = { from: dateAdd(today, -6), to: today, status: 'Menunggu', departemen: '' };
+    const pending = { from: '', to: '', status: 'Menunggu', departemen: '' };
     out.push({ action: 'meta.options' }, { action: 'employees.list' },
-      { action: 'work.list', payload: week }, { action: 'bonus.list', payload: week }, { action: 'bonus.schemes' },
+      { action: 'work.list', payload: pending }, { action: 'bonus.list', payload: pending }, { action: 'bonus.schemes' },
       { action: 'leave.list', payload: { scope: 'approvals', status: 'Menunggu' } },
-      { action: 'payroll.summary', payload: { from: month, to: today, departemen: '' } });
+      { action: 'payroll.summary', payload: { from: month, to: today, departemen: '' } },
+      { action: 'pay.unpaid' }, { action: 'pay.history' }, { action: 'rates.list' },
+      { action: 'attendance.list', payload: { from: today, to: today, departemen: '' } },
+      { action: 'report.monthly', payload: { month: today.slice(0, 7), departemen: '' } });
   }
+  if (u.role === 'admin') out.push({ action: 'settings.get' }, { action: 'locations.list' }, { action: 'users.list' });
   return out;
 }
 

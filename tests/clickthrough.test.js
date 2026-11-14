@@ -128,7 +128,7 @@ test('C01 desktop Admin: setiap menu, dialog, filter, dan tombol bekerja', { ski
     await check(p, 'Izin: filter Disetujui', () => p.click('[data-st="Disetujui"]'), async () => { await sleep(500); const n = await p.$$eval('#leave-card tbody tr', r => r.length); return n + ' baris'; });
 
     await p.goto(t.url + '#/gaji'); await ready(p);
-    for (const tab of ['verifikasi', 'bonus', 'rekap', 'tarif']) {
+    for (const tab of ['verifikasi', 'bonus', 'rekap', 'pembayaran', 'tarif']) {
       await check(p, 'Gaji: tab ' + tab, async () => { await p.click('.tabs a[href="#/gaji/' + tab + '"]'); await ready(p); await p.waitForFunction(() => !document.querySelector('#pay-body [data-loading]'), { timeout: 10000 }); },
         async () => p.evaluate(() => location.hash + ' · ' + document.querySelector('#pay-body').innerText.split(/\n/).slice(0, 2).join(' / ')));
     }
@@ -156,7 +156,7 @@ test('C01 desktop Admin: setiap menu, dialog, filter, dan tombol bekerja', { ski
         await check(p, 'Pengaturan ' + tab + ': tombol tambah', () => add.click(), async () => { const ok = await dialogOpen(p); await p.keyboard.press('Escape'); if (!ok) throw new Error('tidak terbuka'); return 'dialog terbuka & ditutup dengan Escape'; });
       }
     }
-    await check(p, 'Sidebar: Keluar → Batal', async () => { await p.click('.sidebar [data-action="logout"]'); await sleep(250); await p.click('.dialog-foot [data-close]'); },
+    await check(p, 'Sidebar: Keluar → Batal', async () => { await p.click('.sidebar [data-action="account"]'); await p.click('.dropdown [data-do="logout"]'); await sleep(250); await p.click('.dialog-foot [data-close]'); },
       async () => { if (!await p.$('.shell')) throw new Error('keluar tanpa konfirmasi'); return 'konfirmasi keluar dibatalkan, tetap masuk'; });
     assert.deepEqual(t.errors, []);
     evidence.push('PASS  Konsol desktop -> 0 error JavaScript');
@@ -181,9 +181,9 @@ test('C02 ponsel karyawan: navigasi bawah, menu, kamera, absen, tanpa overflow',
         async () => (await p.evaluate(() => location.hash)) + ' · lebar ' + (await noOverflow(p, W)) + 'px');
     }
     await check(p, 'Navigasi bawah: Menu', () => p.click('.bottom-nav [data-action="menu"]'),
-      async () => { const open = await p.$eval('#sidebar', s => s.classList.contains('is-open')); if (!open) throw new Error('tidak terbuka'); return 'laci menu terbuka'; });
-    await check(p, 'Laci menu: Profil Saya', async () => { await p.click('.sidebar [data-nav="profil"]'); await ready(p); },
-      async () => { const open = await p.$eval('#sidebar', s => s.classList.contains('is-open')); if (open) throw new Error('laci tidak menutup'); return (await p.evaluate(() => location.hash)) + ' · laci tertutup · lebar ' + (await noOverflow(p, W)) + 'px'; });
+      async () => { if (!await p.$('#more-sheet')) throw new Error('lembar tidak terbuka'); return 'lembar Lainnya terbuka: ' + (await p.$$eval('#more-sheet .sheet-item', l => l.length)) + ' menu'; });
+    await check(p, 'Lembar Lainnya: Profil Saya', async () => { await p.click('#more-sheet [data-nav="profil"]'); await ready(p); },
+      async () => { if (await p.$('#more-sheet')) throw new Error('lembar tidak menutup'); return (await p.evaluate(() => location.hash)) + ' · laci tertutup · lebar ' + (await noOverflow(p, W)) + 'px'; });
     await check(p, 'Ukuran target sentuh tombol bawah', async () => {}, async () => {
       const sizes = await p.$$eval('.bottom-nav .bn-item', els => els.map(e => Math.round(e.getBoundingClientRect().height)));
       if (sizes.some(h => h < 44)) throw new Error(sizes.join(','));

@@ -168,6 +168,19 @@ function sumReports_(list) {
   return t;
 }
 
+/**
+ * Rentang daftar laporan. Tanpa tanggal: status "Menunggu" berarti semua tanggal (agar
+ * semua yang perlu diverifikasi langsung tampil), status lain berarti 31 hari terakhir.
+ */
+function listRange_(p, status, ctx) {
+  if (!p.from && !p.to) {
+    if (status === 'Menunggu') return { from: '0000-00-00', to: '9999-99-99' };
+    const today = todayLocal_(ctx.now.getTime());
+    return { from: addDays_(today, -30), to: today };
+  }
+  return rangeFromPayload_(p);
+}
+
 function rangeFromPayload_(p) {
   let from = requireDate_(p.from, 'Tanggal awal');
   let to = requireDate_(p.to, 'Tanggal akhir');
@@ -186,8 +199,8 @@ function workList_(ctx, p) {
   if (attendanceId) {
     list = rows_('WorkReports').filter(r => r.attendanceId === attendanceId);
   } else {
-    const range = rangeFromPayload_(p);
     const status = cleanText_(p.status, 20);
+    const range = listRange_(p, status, ctx);
     const dept = cleanText_(p.departemen, 60);
     const own = ctx.user.role === 'karyawan' || p.mine === true;
     const empId = own ? ctx.user.employeeId : cleanText_(p.employeeId, 20);
@@ -227,6 +240,7 @@ function verifyReports_(ctx, rawIds, p, opt) {
       const r = byId[id];
       if (!r) throw appError_('Laporan tidak ditemukan. Muat ulang halaman.', 'NOT_FOUND');
       if (!canVerifyReport_(ctx, r, empMap[r.employeeId])) throw appError_('Anda tidak berwenang memverifikasi laporan milik ' + (empMap[r.employeeId] ? empMap[r.employeeId].nama : r.employeeId) + '.', 'FORBIDDEN');
+      if (r.paymentId) throw appError_('Laporan tanggal ' + longDate_(r.workDate) + ' sudah dibayar. Batalkan pembayarannya dulu di menu Pembayaran bila perlu dikoreksi.', 'ALREADY_PAID');
       return r;
     });
     // Baris tidak bergeser selama lock (tidak ada penghapusan), jadi _row aman dipakai berurutan.
@@ -296,6 +310,7 @@ function payrollSummary_(ctx, p) {
         jobdesk: t.Disetujui.total,
         bonus: b.Disetujui.total,
         gaji: t.Disetujui.total + b.Disetujui.total,
+        dibayar: paidTotal_(byEmp[e.employeeId], 'tarif') + paidTotal_(bonusByEmp[e.employeeId], 'nominal'),
       };
     })
     .sort((a, b) => String(a.employeeId).localeCompare(String(b.employeeId)));
@@ -303,6 +318,7 @@ function payrollSummary_(ctx, p) {
   return {
     from: range.from, to: range.to, rows: rows,
     totalGaji: sum(r => r.gaji), totalJobdesk: sum(r => r.jobdesk), totalBonus: sum(r => r.bonus), totalMenunggu: sum(r => r.menunggu.total),
+    totalDibayar: sum(r => r.dibayar), totalBelumDibayar: sum(r => r.gaji - r.dibayar),
     generatedAt: fmtLocal_(ctx.now.getTime(), 'dd/MM/yyyy HH:mm'),
   };
 }
@@ -321,4 +337,117 @@ function pendingReportCount_(ctx, sheet) {
     if (emp && r.employeeId !== ctx.user.employeeId && canManageEmployee_(ctx, emp)) n++;
   });
   return n;
+}
+
+/* ---------- Pembayaran gaji: sudah & belum dibayar ---------- */
+
+function paidTotal_(list, field) {
+  return list.reduce((s, r) => s + (r.status === 'Disetujui' && r.paymentId ? Number(r[field]) || 0 : 0), 0);
+}
+
+/** Laporan jobdesk & bonus yang sudah disetujui tetapi belum dibayar (semua tanggal). */
+function unpaidRows_(employeeId, sampai) {
+  const pick = (sheet, field, jenis) => rows_(sheet)
+    .filter(r => r.status === 'Disetujui' && !r.paymentId && (!employeeId || r.employeeId === employeeId) && (!sampai || r.workDate <= sampai))
+    .map(r => ({ row: r, sheet: sheet, jenis: jenis, nominal: Number(r[field]) || 0 }));
+  return pick('WorkReports', 'tarif', 'jobdesk').concat(pick('BonusReports', 'nominal', 'bonus'));
+}
+
+function payUnpaid_() {
+  const empMap = {};
+  rows_('Employees').forEach(e => { empMap[e.employeeId] = e; });
+  const by = {};
+  unpaidRows_().forEach(x => {
+    const id = x.row.employeeId;
+    const e = empMap[id];
+    const o = by[id] || (by[id] = { employeeId: id, nama: e ? e.nama : id + ' (sudah dihapus)', jabatan: e ? e.jabatan : '', departemen: e ? e.departemen : '',
+      jobdesk: 0, bonus: 0, total: 0, jumlahLaporan: 0, dari: x.row.workDate, sampai: x.row.workDate });
+    o[x.jenis] += x.nominal;
+    o.total += x.nominal;
+    o.jumlahLaporan++;
+    if (x.row.workDate < o.dari) o.dari = x.row.workDate;
+    if (x.row.workDate > o.sampai) o.sampai = x.row.workDate;
+  });
+  const rows = Object.keys(by).map(k => by[k]).sort((a, b) => b.total - a.total || String(a.nama).localeCompare(String(b.nama)));
+  return { rows: rows, total: rows.reduce((s, r) => s + r.total, 0) };
+}
+
+/**
+ * Menandai gaji satu karyawan sudah dibayar: semua laporan Disetujui yang belum dibayar sampai
+ * tanggal tertentu. Total yang dilihat HR dikirim ulang dan dicocokkan di dalam lock, sehingga
+ * laporan yang baru disetujui di antara melihat dan menekan "Sudah dibayar" tidak ikut tanpa disadari.
+ */
+function payMark_(ctx, p) {
+  const employeeId = requireText_(p.employeeId, 'Karyawan', 20);
+  const sampai = requireDate_(p.sampai, 'Dibayar sampai tanggal');
+  const expected = Number(p.expectedTotal);
+  const catatan = cleanText_(p.catatan, 200);
+  const nowIso = ctx.now.toISOString();
+  const result = withLock_(() => {
+    invalidate_('WorkReports');
+    invalidate_('BonusReports');
+    const items = unpaidRows_(employeeId, sampai);
+    if (!items.length) throw appError_('Tidak ada laporan disetujui yang belum dibayar untuk karyawan ini.', 'VALIDATION');
+    const total = items.reduce((s, x) => s + x.nominal, 0);
+    if (isFinite(expected) && expected !== total) {
+      throw appError_('Jumlah yang belum dibayar berubah (sekarang ' + total + '). Muat ulang halaman lalu periksa lagi.', 'PAY_CHANGED');
+    }
+    const emp = findBy_('Employees', 'employeeId', employeeId);
+    const paymentId = shortId_('BYR');
+    items.forEach(x => update_(x.sheet, x.row._row, { paymentId: paymentId, paidAt: nowIso }));
+    const dates = items.map(x => x.row.workDate).sort();
+    const rec = {
+      paymentId: paymentId, employeeId: employeeId, nama: emp ? emp.nama : employeeId,
+      dari: dates[0], sampai: dates[dates.length - 1], jumlahLaporan: items.length,
+      jobdesk: items.filter(x => x.jenis === 'jobdesk').reduce((s, x) => s + x.nominal, 0),
+      bonus: items.filter(x => x.jenis === 'bonus').reduce((s, x) => s + x.nominal, 0),
+      total: total, catatan: catatan, status: 'Dibayar', dibayarOleh: ctx.user.username, dibayarAt: nowIso,
+      dibatalkanOleh: '', dibatalkanAt: '',
+    };
+    insert_('Payments', rec);
+    return rec;
+  });
+  audit_(ctx, 'PAY_MARK', 'Payment', result.paymentId, 'SUCCESS', { employeeId: employeeId, total: result.total, laporan: result.jumlahLaporan });
+  return strip_(result);
+}
+
+function payHistory_(ctx, p) {
+  const empId = cleanText_(p.employeeId, 20);
+  const list = rows_('Payments').filter(r => !empId || r.employeeId === empId)
+    .sort((a, b) => (a.dibayarAt < b.dibayarAt ? 1 : -1));
+  return { payments: list.slice(0, 500).map(r => strip_(r)), total: list.filter(r => r.status === 'Dibayar').reduce((s, r) => s + (Number(r.total) || 0), 0) };
+}
+
+/** Membatalkan pembayaran yang salah: laporannya kembali menjadi "belum dibayar". */
+function payCancel_(ctx, p) {
+  const id = cleanText_(p.paymentId, 30);
+  const nowIso = ctx.now.toISOString();
+  const rec = withLock_(() => {
+    const cur = freshById_('Payments', 'paymentId', id);
+    if (!cur) throw appError_('Pembayaran tidak ditemukan.', 'NOT_FOUND');
+    if (cur.status !== 'Dibayar') throw appError_('Pembayaran ini sudah dibatalkan.', 'VALIDATION');
+    ['WorkReports', 'BonusReports'].forEach(sheet => {
+      invalidate_(sheet);
+      rows_(sheet).filter(r => r.paymentId === id).forEach(r => update_(sheet, r._row, { paymentId: '', paidAt: '' }));
+    });
+    update_('Payments', cur._row, { status: 'Dibatalkan', dibatalkanOleh: ctx.user.username, dibatalkanAt: nowIso });
+    return cur;
+  });
+  audit_(ctx, 'PAY_CANCEL', 'Payment', id, 'SUCCESS', { employeeId: rec.employeeId, total: rec.total });
+  return { ok: true };
+}
+
+/** Gaji saya: pembayaran yang sudah diterima dan jumlah yang belum dibayar. */
+function payMine_(ctx) {
+  const emp = ctx.employee;
+  if (!emp) return { payments: [], belumDibayar: 0, sudahDibayar: 0 };
+  const payments = rows_('Payments').filter(r => r.employeeId === emp.employeeId && r.status === 'Dibayar')
+    .sort((a, b) => (a.dibayarAt < b.dibayarAt ? 1 : -1)).map(r => strip_(r));
+  const unpaid = unpaidRows_(emp.employeeId);
+  return {
+    payments: payments.slice(0, 100),
+    sudahDibayar: payments.reduce((s, r) => s + (Number(r.total) || 0), 0),
+    belumDibayar: unpaid.reduce((s, x) => s + x.nominal, 0),
+    belumDibayarLaporan: unpaid.length,
+  };
 }
