@@ -726,7 +726,7 @@ test('E19 versi Vercel: halaman aplikasi tersimpan di HP (service worker), terbu
     // Muat ulang sekali agar halaman dikendalikan service worker.
     await t.page.reload({ waitUntil: 'domcontentloaded' });
     await t.page.waitForFunction(() => !!navigator.serviceWorker.controller, { timeout: 15000 });
-    await t.page.waitForFunction(() => caches.open('ggshops-shell-v1').then(c => c.keys()).then(k => k.length > 0), { timeout: 15000 });
+    await t.page.waitForFunction(() => caches.open('ggshops-shell-v2').then(c => c.keys()).then(k => k.length > 0), { timeout: 15000 });
     await t.page.setOfflineMode(true);
     const t0 = Date.now();
     await t.page.reload({ waitUntil: 'domcontentloaded' });
@@ -781,4 +781,37 @@ test('E20 verifikasi semua tanggal tanpa mencari, lalu tandai gaji sudah dibayar
     await t.page.screenshot({ path: path.join(SHOTS, 'desktop-sudah-dibayar.png') });
     assert.deepEqual(t.errors, []);
   } finally { await t.close(); }
+});
+
+test('E21 versi Vercel: HP yang masih menyimpan versi lama otomatis pindah ke versi baru tanpa menekan apa pun', { skip: SKIP }, async () => {
+  const http = require('http');
+  // Service worker versi lama (v13): halaman dari simpanan dulu, versi baru di belakang.
+  const OLD_SW = "const CACHE='ggshops-shell-v1';self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));" +
+    "self.addEventListener('fetch',e=>{const r=e.request;if(r.mode!=='navigate')return;e.respondWith(caches.open(CACHE).then(async c=>{const k=new URL(r.url).pathname;const hit=await c.match(k);" +
+    "const net=fetch(r,{cache:'no-cache'}).then(async res=>{if(res.ok)await c.put(k,res.clone());return res;}).catch(()=>null);if(hit){e.waitUntil(net);return hit;}return (await net)||Response.error();}));});";
+  const NEW_SW = require('../dev/build-vercel').SW_JS;
+  let version = 'LAMA';
+  const page = v => '<!doctype html><meta charset="utf-8"><title>uji</title><body><h1 id="v">VERSI-' + v + '</h1><script>navigator.serviceWorker.register("/sw.js")</script></body>';
+  const srv = http.createServer((q, r) => {
+    if (q.url === '/sw.js') { r.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'no-cache' }); r.end(version === 'LAMA' ? OLD_SW : NEW_SW); return; }
+    r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' }); r.end(page(version));
+  });
+  await new Promise(res => srv.listen(0, '127.0.0.1', res));
+  const url = 'http://127.0.0.1:' + srv.address().port + '/';
+  const browser = await puppeteer.launch({ executablePath: CHROME, headless: true });
+  try {
+    const p = await browser.newPage();
+    await p.goto(url); await p.waitForFunction(() => navigator.serviceWorker.ready.then(() => true));
+    await p.reload(); await p.waitForFunction(() => !!navigator.serviceWorker.controller);
+    await p.waitForFunction(() => caches.open('ggshops-shell-v1').then(c => c.keys()).then(k => k.length > 0));
+    assert.equal(await p.$eval('#v', e => e.textContent), 'VERSI-LAMA');
+    version = 'BARU'; // situs diperbarui (deploy baru)
+    await p.reload(); // pengguna membuka aplikasi lagi: SW lama menyajikan halaman lama dulu...
+    // ...lalu SW baru terpasang dan memuat ulang halaman sendiri.
+    await p.waitForFunction(() => document.getElementById('v') && document.getElementById('v').textContent === 'VERSI-BARU', { timeout: 15000 });
+    // Setelahnya, setiap buka langsung versi terbaru dari internet.
+    version = 'TERBARU';
+    await p.reload();
+    await p.waitForFunction(() => document.getElementById('v').textContent === 'VERSI-TERBARU', { timeout: 10000 });
+  } finally { await browser.close(); srv.close(); }
 });
