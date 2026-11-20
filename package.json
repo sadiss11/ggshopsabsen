@@ -12,7 +12,7 @@
     "assets": "node dev/embed-assets.js",
     "build": "node dev/build.js",
     "dev": "node dev/server.js",
-    "push": "node dev/build.js && clasp push --force",
+    "push": "node dev/build.js && clasp -u baru push --force",
     "vercel": "node dev/build.js && node dev/build-vercel.js"
   },
   "devDependencies": {
