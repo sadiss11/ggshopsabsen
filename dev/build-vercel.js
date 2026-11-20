@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 
 const EXEC_URL = process.env.GAS_EXEC_URL ||
-  'https://script.google.com/macros/s/AKfycby2Verd7ODJY4QT7_LYLRqxkFFK5WVgvtDDyUTSaE_dmgcyBKGNgdHUq1MGe_aJtLqK/exec';
+  'https://script.google.com/macros/s/AKfycbyUIzNTcVfMa3gg6Zi9svaQzEuDKGICBU35QIowPR82Xd2mYaA2u2RQMbRXSQq7q-gG/exec';
 
 /** Pengganti google.script.run: setiap pemanggilan api(...) dikirim sebagai POST text/plain. */
 function shim(url) {
